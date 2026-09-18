@@ -95,7 +95,7 @@ class Trainer:
             )
 
             # 7. PPO updates
-            self._update_agent_a(logprobs_a, r_a)
+            self._update_agent_a(prompt, logprobs_a, r_a)
             self._update_agent_b(pred_type, pred_span, text, r_b)
 
             # 8. Logging
@@ -111,26 +111,39 @@ class Trainer:
 
     # ── PPO update helpers ────────────────────────────────────────────────
 
-    def _update_agent_a(self, old_logprobs: dict, reward: float):
-        reward_tensor = torch.tensor(reward, dtype=torch.float32)
-    
-        for epoch in range(self.config["ppo_epochs"]):
-            retain = (epoch < self.config["ppo_epochs"] - 1)
-            loss = self.agent_a.ppo_loss(old_logprobs, old_logprobs, reward_tensor)
+    def _update_agent_a(self, prompt: str, old_logprobs: dict, reward: float):
+        reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device)
+        action_indices = old_logprobs["action_indices"]
+
+        for _ in range(self.config["ppo_epochs"]):
+            # Fresh forward pass → fresh graph each epoch
+            fresh_head_out = self.agent_a.recompute_strategy_logprobs(prompt)
+
+            loss = self.agent_a.ppo_loss(
+                old_logprobs   = old_logprobs,
+                fresh_head_out = fresh_head_out,
+                action_indices = action_indices,
+                reward         = reward_tensor,
+            )
             self.opt_a.zero_grad()
-            loss.backward(retain_graph=retain)
-            torch.nn.utils.clip_grad_norm_(self.agent_a.policy.parameters(), 1.0)
+            loss.backward()    # fresh graph every epoch — no retain_graph needed
+            torch.nn.utils.clip_grad_norm_(
+                list(self.agent_a.policy.parameters()) +
+                list(self.agent_a.model.parameters()),
+                1.0
+            )
             self.opt_a.step()
+            torch.cuda.empty_cache()
 
     def _update_agent_b(self, pred_type, pred_span, text, reward: float):
-        reward_tensor = torch.tensor(reward, dtype=torch.float32)
-        
-        for epoch in range(self.config["ppo_epochs"]):
-            # Fresh forward pass each epoch — new graph each time
+        reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device)
+
+        for _ in range(self.config["ppo_epochs"]):
+            # Fresh forward pass each epoch = fresh graph, no retain needed
             _, _, new_logprobs = self.agent_b.detect(text)
             loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward_tensor)
             self.opt_b.zero_grad()
-            loss.backward()   # no retain needed — fresh graph every epoch
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(self.agent_b.type_head.parameters()) +
                 list(self.agent_b.span_start_head.parameters()) +
@@ -138,6 +151,7 @@ class Trainer:
                 1.0,
             )
             self.opt_b.step()
+            torch.cuda.empty_cache()
 
     # ── Logging & checkpointing ───────────────────────────────────────────
 

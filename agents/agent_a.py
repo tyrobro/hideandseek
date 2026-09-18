@@ -85,21 +85,9 @@ class AgentA(nn.Module):
 
     # ── Strategy selection ────────────────────────────────────────────────
 
-    def select_strategy(
-        self, prompt_hidden: torch.Tensor
-    ) -> Tuple[str, float, float, Dict]:
-        """
-        Run the policy head and sample a strategy.
-
-        Returns:
-            chosen_type      : e.g. "token"
-            intensity        : float
-            position_frac    : fraction along sequence where watermark starts
-            log_probs        : dict of log-probs for PPO update
-        """
+    def select_strategy(self, prompt_hidden: torch.Tensor) -> Tuple:
         head_out = self.policy(prompt_hidden)
 
-        # Sample from each head (not argmax — we need exploration)
         type_dist      = torch.distributions.Categorical(logits=head_out["type_logits"])
         intensity_dist = torch.distributions.Categorical(logits=head_out["intensity_logits"])
         position_dist  = torch.distributions.Categorical(logits=head_out["position_logits"])
@@ -113,13 +101,19 @@ class AgentA(nn.Module):
         position_frac = WatermarkPolicyHead.POSITION_FRACTIONS[position_idx.item()]
 
         log_probs = {
-            "type"     : type_dist.log_prob(type_idx),
-            "intensity": intensity_dist.log_prob(intensity_idx),
-            "position" : position_dist.log_prob(position_idx),
+            "type"      : type_dist.log_prob(type_idx).detach(),
+            "intensity" : intensity_dist.log_prob(intensity_idx).detach(),
+            "position"  : position_dist.log_prob(position_idx).detach(),
         }
 
-        return chosen_type, intensity, position_frac, log_probs
+        # Also store the action indices so PPO can recompute logprob of same action
+        action_indices = {
+            "type"      : type_idx.detach(),
+            "intensity" : intensity_idx.detach(),
+            "position"  : position_idx.detach(),
+        }
 
+        return chosen_type, intensity, position_frac, log_probs, action_indices
     # ── Watermarked generation ────────────────────────────────────────────
 
     def generate(self, prompt: str) -> Tuple[str, str, Tuple[int, int], Dict]:
@@ -133,7 +127,7 @@ class AgentA(nn.Module):
         prompt_hidden = outputs.hidden_states[-1].detach()
 
         # Select strategy — this part needs grad for PPO
-        chosen_type, intensity, position_frac, strategy_logprobs = \
+        chosen_type, intensity, position_frac, strategy_logprobs, action_indices = \
             self.select_strategy(prompt_hidden)
 
         # Watermark span
@@ -175,12 +169,42 @@ class AgentA(nn.Module):
 
         # Token logprobs are not needed since generation is no_grad
         # PPO only updates the policy head via strategy_logprobs
-        all_logprobs = {"strategy": strategy_logprobs, "tokens": None}
+        all_logprobs = {"strategy": strategy_logprobs, "action_indices": action_indices, "tokens": None}
 
         return text, chosen_type, true_span, all_logprobs
 
     # ── Internal strategy dispatcher ──────────────────────────────────────
 
+    def recompute_strategy_logprobs(self, prompt: str) -> Dict:
+        """
+        Re-run just the policy head on the prompt to get fresh logprobs.
+        Called each PPO epoch — creates a fresh graph every time.
+        """
+        inputs = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=64
+        ).to(self.device)
+
+        # Need grad here — this is what PPO differentiates through
+        outputs       = self.model(**inputs, output_hidden_states=True)
+        prompt_hidden = outputs.hidden_states[-1]   # (1, seq, hidden)
+
+        head_out = self.policy(prompt_hidden)
+
+        type_dist      = torch.distributions.Categorical(logits=head_out["type_logits"])
+        intensity_dist = torch.distributions.Categorical(logits=head_out["intensity_logits"])
+        position_dist  = torch.distributions.Categorical(logits=head_out["position_logits"])
+
+        # Sample — but we want the logprob of the SAME action taken earlier
+        # so we pass the indices through; caller stores them from the original sample
+        return {
+            "type_logits"      : head_out["type_logits"],
+            "intensity_logits" : head_out["intensity_logits"],
+            "position_logits"  : head_out["position_logits"],
+            "type_dist"        : type_dist,
+            "intensity_dist"   : intensity_dist,
+            "position_dist"    : position_dist,
+        }
+    
     def _apply_strategy(
         self,
         chosen_type : str,
@@ -221,16 +245,27 @@ class AgentA(nn.Module):
 
     def ppo_loss(
     self,
-    old_logprobs : Dict,
-    new_logprobs : Dict,
-    reward       : torch.Tensor,
+    old_logprobs    : Dict,
+    fresh_head_out  : Dict,
+    action_indices  : Dict,
+    reward          : torch.Tensor,
 ) -> torch.Tensor:
+        """
+        PPO loss using fresh logprobs recomputed this epoch
+        vs old logprobs stored from the original rollout.
+        """
         clip_eps = self.config["clip_epsilon"]
         losses   = []
 
+        key_to_dist = {
+            "type"      : fresh_head_out["type_dist"],
+            "intensity" : fresh_head_out["intensity_dist"],
+            "position"  : fresh_head_out["position_dist"],
+        }
+
         for key in ["type", "intensity", "position"]:
-            old_lp  = old_logprobs["strategy"][key].detach()   # always detach old
-            new_lp  = new_logprobs["strategy"][key]
+            old_lp  = old_logprobs["strategy"][key]           # detached scalar
+            new_lp  = key_to_dist[key].log_prob(action_indices[key])
             ratio   = torch.exp(new_lp - old_lp)
             clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
             obj     = torch.min(ratio * reward, clipped * reward)
