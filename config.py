@@ -13,7 +13,7 @@ CONFIG = {
     "num_watermark_types" : 4,
 
     # ── Text generation ──────────────────────────────────────────────────
-    "max_gen_length" : 80,
+    "max_gen_length" : 50,
     "min_gen_length" : 40,
 
     # ── RL / PPO ─────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, LogitsProcessor
 from typing import Tuple, Dict, List
 from environment.watermark_types import WATERMARK_STRATEGIES
 from config import CONFIG
@@ -43,6 +43,34 @@ class WatermarkPolicyHead(nn.Module):
             "position_logits" : self.position_head(pooled),
         }
 
+class WatermarkLogitsProcessor(LogitsProcessor):
+    """
+    Plugs into HuggingFace's generate() pipeline.
+    Applies the chosen watermark strategy only within the designated span window.
+    This replaces the manual token-by-token loop entirely.
+    """
+
+    def __init__(self, strategy, wm_start, wm_end, intensity, agent, max_new):
+        self.strategy  = strategy
+        self.wm_start  = wm_start
+        self.wm_end    = wm_end
+        self.intensity = intensity
+        self.agent     = agent     # reference to AgentA for _apply_strategy
+        self.max_new   = max_new
+        self.step      = 0         # tracks generation step
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        # Only apply watermark within the designated window
+        if self.wm_start <= self.step <= self.wm_end:
+            scores, _ = self.agent._apply_strategy(
+                self.strategy,
+                scores,
+                self.step,
+                self.max_new,
+                self.intensity,
+            )
+        self.step += 1
+        return scores
 
 class AgentA(nn.Module):
     """
@@ -117,76 +145,82 @@ class AgentA(nn.Module):
     # ── Watermarked generation ────────────────────────────────────────────
 
     def generate(self, prompt: str) -> Tuple[str, str, Tuple[int, int], Dict]:
-        inputs     = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=64).to(self.device)
-        input_ids  = inputs["input_ids"]
-        max_new    = self.config["max_gen_length"]
+        inputs    = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=64,
+        ).to(self.device)
+        input_ids = inputs["input_ids"]
+        max_new   = self.config["max_gen_length"]
 
-        # Policy head needs grad — but run it first, then free the hidden states
+        # ── Step 1: Policy head selects strategy (needs grad) ────────────
         with torch.no_grad():
             outputs = self.model(**inputs, output_hidden_states=True)
         prompt_hidden = outputs.hidden_states[-1].detach()
+        del outputs
+        torch.cuda.empty_cache()
 
-        # Select strategy — this part needs grad for PPO
         chosen_type, intensity, position_frac, strategy_logprobs, action_indices = \
             self.select_strategy(prompt_hidden)
+        del prompt_hidden
+        torch.cuda.empty_cache()
 
-        # Watermark span
+        # ── Step 2: Determine watermark span ─────────────────────────────
         wm_start  = int(position_frac * max_new)
         wm_size   = max(5, max_new // 5)
         wm_end    = min(wm_start + wm_size, max_new - 1)
         true_span = (wm_start, wm_end)
 
-        # Token generation — NO gradients here, saves enormous memory
-        generated_ids = input_ids.clone()
+        # ── Step 3: Apply logit processor for watermark ───────────────────
+        # Instead of manual loop, use HF's logits_processor hook
+        processor = WatermarkLogitsProcessor(
+            strategy    = chosen_type,
+            wm_start    = wm_start,
+            wm_end      = wm_end,
+            intensity   = intensity,
+            agent       = self,
+            max_new     = max_new,
+        )
 
+        # ── Step 4: HF generate with KV-cache (memory efficient) ─────────
         with torch.no_grad():
-            for step in range(max_new):
-                out    = self.model(input_ids=generated_ids)
-                logits = out.logits[:, -1, :].clone()
+            generated = self.model.generate(
+                input_ids         = input_ids,
+                max_new_tokens    = max_new,
+                do_sample         = True,
+                temperature       = 1.0,
+                logits_processor  = [processor],
+                pad_token_id      = self.tokenizer.eos_token_id,
+                use_cache         = True,   # KV-cache: huge memory saving
+            )
 
-                in_window = wm_start <= step <= wm_end
-                if in_window:
-                    logits, _ = self._apply_strategy(
-                        chosen_type, logits, wm_start, max_new, intensity
-                    )
-
-                probs    = torch.nn.functional.softmax(logits, dim=-1)
-                next_tok = torch.multinomial(probs, num_samples=1)
-                generated_ids = torch.cat([generated_ids, next_tok], dim=-1)
-
-                if next_tok.item() == self.tokenizer.eos_token_id:
-                    break
-
-                # Free intermediate tensors aggressively
-                del out, logits, probs
-
-        new_ids = generated_ids[:, input_ids.shape[1]:]
+        new_ids = generated[:, input_ids.shape[1]:]
         text    = self.tokenizer.decode(new_ids.squeeze(), skip_special_tokens=True)
 
-        # Clean up
-        del generated_ids, prompt_hidden
+        del generated, new_ids, input_ids
         torch.cuda.empty_cache()
 
-        # Token logprobs are not needed since generation is no_grad
-        # PPO only updates the policy head via strategy_logprobs
-        all_logprobs = {"strategy": strategy_logprobs, "action_indices": action_indices, "tokens": None}
+        all_logprobs = {
+            "strategy"       : strategy_logprobs,
+            "action_indices" : action_indices,
+            "tokens"         : None,
+        }
 
         return text, chosen_type, true_span, all_logprobs
-
     # ── Internal strategy dispatcher ──────────────────────────────────────
 
     def recompute_strategy_logprobs(self, prompt: str) -> Dict:
-        """
-        Re-run just the policy head on the prompt to get fresh logprobs.
-        Called each PPO epoch — creates a fresh graph every time.
-        """
         inputs = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=64
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=64,
         ).to(self.device)
 
-        # Need grad here — this is what PPO differentiates through
+        # This forward pass NEEDS grad — it's what PPO differentiates
         outputs       = self.model(**inputs, output_hidden_states=True)
-        prompt_hidden = outputs.hidden_states[-1]   # (1, seq, hidden)
+        prompt_hidden = outputs.hidden_states[-1]
 
         head_out = self.policy(prompt_hidden)
 
@@ -194,8 +228,6 @@ class AgentA(nn.Module):
         intensity_dist = torch.distributions.Categorical(logits=head_out["intensity_logits"])
         position_dist  = torch.distributions.Categorical(logits=head_out["position_logits"])
 
-        # Sample — but we want the logprob of the SAME action taken earlier
-        # so we pass the indices through; caller stores them from the original sample
         return {
             "type_logits"      : head_out["type_logits"],
             "intensity_logits" : head_out["intensity_logits"],
