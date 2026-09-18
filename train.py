@@ -130,7 +130,7 @@ class Trainer:
         action_indices = old_logprobs["action_indices"]
 
         for _ in range(self.config["ppo_epochs"]):
-            with torch.cuda.amp.autocast('cuda'):
+            with torch.cuda.amp.autocast(device_type = 'cuda'):
                 fresh_head_out = self.agent_a.recompute_strategy_logprobs(prompt)
                 loss = self.agent_a.ppo_loss(
                     old_logprobs   = old_logprobs,
@@ -154,7 +154,7 @@ class Trainer:
         reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device_b)
 
         for _ in range(self.config["ppo_epochs"]):
-            with torch.cuda.amp.autocast('cuda'):
+            with torch.cuda.amp.autocast(device_type = 'cuda'):
                 _, _, new_logprobs = self.agent_b.detect(text)
                 loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward_tensor)
             self.opt_b.zero_grad()
