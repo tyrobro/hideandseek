@@ -58,10 +58,10 @@ class Trainer:
         print(f"\nStarting Hide&Seek training for {self.config['num_episodes']} episodes...\n")
 
         for episode in tqdm(range(1, self.config["num_episodes"] + 1)):
-
+            torch.cuda.empty_cache()
             # 1. Sample a prompt
             idx    = torch.randint(0, len(self.prompts), (1,)).item()
-            prompt = self.prompts[idx][:200]
+            prompt = self.prompts[idx][:100]
 
             # 2. Reset environment
             self.env.reset(prompt)

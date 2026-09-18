@@ -122,74 +122,60 @@ class AgentA(nn.Module):
 
     # ── Watermarked generation ────────────────────────────────────────────
 
-    def generate(
-        self, prompt: str
-    ) -> Tuple[str, str, Tuple[int, int], Dict]:
-        """
-        Full generation pipeline:
-          encode prompt → select strategy → generate with watermark applied
-
-        Returns:
-            text          : generated string
-            chosen_type   : watermark type used
-            true_span     : (start, end) token indices of watermark region
-            strategy_logprobs : log-probs for PPO
-        """
-        # 1. Encode prompt
-        inputs     = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+    def generate(self, prompt: str) -> Tuple[str, str, Tuple[int, int], Dict]:
+        inputs     = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=64).to(self.device)
         input_ids  = inputs["input_ids"]
         max_new    = self.config["max_gen_length"]
 
-        # 2. Forward pass to get hidden states for policy head
+        # Policy head needs grad — but run it first, then free the hidden states
         with torch.no_grad():
-            outputs = self.model(**inputs)
-        prompt_hidden = outputs.hidden_states[-1]   # last layer hidden states
+            outputs = self.model(**inputs, output_hidden_states=True)
+        prompt_hidden = outputs.hidden_states[-1].detach()
 
-        # 3. Select strategy
+        # Select strategy — this part needs grad for PPO
         chosen_type, intensity, position_frac, strategy_logprobs = \
             self.select_strategy(prompt_hidden)
 
-        # 4. Determine watermark span
-        wm_start = int(position_frac * max_new)
-        wm_size  = max(5, max_new // 5)
-        wm_end   = min(wm_start + wm_size, max_new - 1)
+        # Watermark span
+        wm_start  = int(position_frac * max_new)
+        wm_size   = max(5, max_new // 5)
+        wm_end    = min(wm_start + wm_size, max_new - 1)
         true_span = (wm_start, wm_end)
 
-        # 5. Generate token by token with watermark applied in the span window
-        generated_ids  = input_ids.clone()
-        gen_logprobs   = []
+        # Token generation — NO gradients here, saves enormous memory
+        generated_ids = input_ids.clone()
 
-        for step in range(max_new):
-            out     = self.model(input_ids=generated_ids)
-            logits  = out.logits[:, -1, :]   # (1, vocab_size) — next token logits
+        with torch.no_grad():
+            for step in range(max_new):
+                out    = self.model(input_ids=generated_ids)
+                logits = out.logits[:, -1, :].clone()
 
-            # Apply watermark only within the designated span
-            in_window = wm_start <= step <= wm_end
+                in_window = wm_start <= step <= wm_end
+                if in_window:
+                    logits, _ = self._apply_strategy(
+                        chosen_type, logits, wm_start, max_new, intensity
+                    )
 
-            if in_window:
-                logits, _ = self._apply_strategy(
-                    chosen_type, logits, wm_start, max_new, intensity
-                )
+                probs    = torch.nn.functional.softmax(logits, dim=-1)
+                next_tok = torch.multinomial(probs, num_samples=1)
+                generated_ids = torch.cat([generated_ids, next_tok], dim=-1)
 
-            # Sample next token
-            probs    = F.softmax(logits, dim=-1)
-            next_tok = torch.multinomial(probs, num_samples=1)
-            log_p    = torch.log(probs.gather(-1, next_tok) + 1e-9)
-            gen_logprobs.append(log_p)
+                if next_tok.item() == self.tokenizer.eos_token_id:
+                    break
 
-            generated_ids = torch.cat([generated_ids, next_tok], dim=-1)
+                # Free intermediate tensors aggressively
+                del out, logits, probs
 
-            if next_tok.item() == self.tokenizer.eos_token_id:
-                break
-
-        # 6. Decode
         new_ids = generated_ids[:, input_ids.shape[1]:]
         text    = self.tokenizer.decode(new_ids.squeeze(), skip_special_tokens=True)
 
-        all_logprobs = {
-            "strategy": strategy_logprobs,
-            "tokens"  : torch.cat(gen_logprobs, dim=-1),   # (num_generated,)
-        }
+        # Clean up
+        del generated_ids, prompt_hidden
+        torch.cuda.empty_cache()
+
+        # Token logprobs are not needed since generation is no_grad
+        # PPO only updates the policy head via strategy_logprobs
+        all_logprobs = {"strategy": strategy_logprobs, "tokens": None}
 
         return text, chosen_type, true_span, all_logprobs
 
