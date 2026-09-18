@@ -52,8 +52,8 @@ class Trainer:
             lr=config["lr_agent_b"],
         )
 # Mixed precision — cuts VRAM ~40-50% with negligible quality loss
-        self.scaler_a = torch.cuda.amp.GradScaler()
-        self.scaler_b = torch.cuda.amp.GradScaler()
+        self.scaler_a = torch.amp.GradScaler(device='cuda')
+        self.scaler_b = torch.amp.GradScaler(device='cuda')
 
         # ── Dataset ───────────────────────────────────────────────────────
         print("Loading dataset...")
