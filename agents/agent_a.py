@@ -187,6 +187,7 @@ class AgentA(nn.Module):
         with torch.no_grad():
             generated = self.model.generate(
                 input_ids         = input_ids,
+                attention_mask = inputs["attention_mask"],
                 max_new_tokens    = max_new,
                 do_sample         = True,
                 temperature       = 1.0,
@@ -216,6 +217,8 @@ class AgentA(nn.Module):
             return_tensors="pt",
             truncation=True,
             max_length=64,
+            padding = True,
+            return_attention_mask = True,
         ).to(self.device)
 
         # This forward pass NEEDS grad — it's what PPO differentiates
