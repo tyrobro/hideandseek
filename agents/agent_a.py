@@ -234,24 +234,20 @@ class AgentA(nn.Module):
     # ── PPO update ────────────────────────────────────────────────────────
 
     def ppo_loss(
-        self,
-        old_logprobs : Dict,
-        new_logprobs : Dict,
-        reward       : float,
-    ) -> torch.Tensor:
-        """
-        Clipped PPO objective for Agent A.
-        Applied separately to the strategy head and the token generation head.
-        """
+    self,
+    old_logprobs : Dict,
+    new_logprobs : Dict,
+    reward       : torch.Tensor,
+) -> torch.Tensor:
         clip_eps = self.config["clip_epsilon"]
         losses   = []
 
         for key in ["type", "intensity", "position"]:
-            old_lp = old_logprobs["strategy"][key].detach()
-            new_lp = new_logprobs["strategy"][key]
-            ratio  = torch.exp(new_lp - old_lp)
+            old_lp  = old_logprobs["strategy"][key].detach()   # always detach old
+            new_lp  = new_logprobs["strategy"][key]
+            ratio   = torch.exp(new_lp - old_lp)
             clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
-            loss    = -torch.min(ratio * reward, clipped * reward)
-            losses.append(loss)
+            obj     = torch.min(ratio * reward, clipped * reward)
+            losses.append(-obj)
 
         return torch.stack(losses).mean()

@@ -112,22 +112,25 @@ class Trainer:
     # ── PPO update helpers ────────────────────────────────────────────────
 
     def _update_agent_a(self, old_logprobs: dict, reward: float):
-        for _ in range(self.config["ppo_epochs"]):
-            # Re-run policy head to get fresh log probs
-            # (In full PPO you'd store the hidden states; simplified here)
-            loss = self.agent_a.ppo_loss(old_logprobs, old_logprobs, reward)
+        reward_tensor = torch.tensor(reward, dtype=torch.float32)
+    
+        for epoch in range(self.config["ppo_epochs"]):
+            retain = (epoch < self.config["ppo_epochs"] - 1)
+            loss = self.agent_a.ppo_loss(old_logprobs, old_logprobs, reward_tensor)
             self.opt_a.zero_grad()
-            loss.backward()
+            loss.backward(retain_graph=retain)
             torch.nn.utils.clip_grad_norm_(self.agent_a.policy.parameters(), 1.0)
             self.opt_a.step()
 
     def _update_agent_b(self, pred_type, pred_span, text, reward: float):
-        for _ in range(self.config["ppo_epochs"]):
+        reward_tensor = torch.tensor(reward, dtype=torch.float32)
+        
+        for epoch in range(self.config["ppo_epochs"]):
+            # Fresh forward pass each epoch — new graph each time
             _, _, new_logprobs = self.agent_b.detect(text)
-            # Build a dummy old_logprobs matching shape (simplified PPO)
-            loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward)
+            loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward_tensor)
             self.opt_b.zero_grad()
-            loss.backward()
+            loss.backward()   # no retain needed — fresh graph every epoch
             torch.nn.utils.clip_grad_norm_(
                 list(self.agent_b.type_head.parameters()) +
                 list(self.agent_b.span_start_head.parameters()) +
