@@ -17,19 +17,32 @@ from config import CONFIG
 class Trainer:
     def __init__(self, config: dict):
         self.config = config
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"Using device: {self.device}")
+
+        # ── Assign one GPU per agent ───────────────────────────────────────
+        if torch.cuda.device_count() >= 2:
+            self.device_a = "cuda:0"   # Agent A (GPT-2 watermarker) 
+            self.device_b = "cuda:1"   # Agent B (DistilBERT detector)
+            print(f"Dual GPU mode: Agent A → {self.device_a} | Agent B → {self.device_b}")
+        elif torch.cuda.device_count() == 1:
+            self.device_a = "cuda:0"
+            self.device_b = "cuda:0"
+            print("Single GPU mode: both agents on cuda:0")
+        else:
+            self.device_a = "cpu"
+            self.device_b = "cpu"
+            print("CPU mode")
 
         # ── Agents ────────────────────────────────────────────────────────
-        self.agent_a = AgentA(config, self.device)
-        self.agent_b = AgentB(config, self.device)
+        self.agent_a = AgentA(config, self.device_a)
+        self.agent_b = AgentB(config, self.device_b)
 
         # ── Environment ───────────────────────────────────────────────────
         self.env = WatermarkEnv(config)
 
         # ── Optimizers ────────────────────────────────────────────────────
         self.opt_a = torch.optim.Adam(
-            list(self.agent_a.policy.parameters()),
+            list(self.agent_a.policy.parameters()) +
+            list(self.agent_a.model.parameters()),
             lr=config["lr_agent_a"],
         )
         self.opt_b = torch.optim.Adam(
@@ -38,20 +51,21 @@ class Trainer:
             list(self.agent_b.span_end_head.parameters()),
             lr=config["lr_agent_b"],
         )
+# Mixed precision — cuts VRAM ~40-50% with negligible quality loss
+        self.scaler_a = torch.cuda.amp.GradScaler()
+        self.scaler_b = torch.cuda.amp.GradScaler()
 
-        # ── Dataset (prompts) ─────────────────────────────────────────────
+        # ── Dataset ───────────────────────────────────────────────────────
         print("Loading dataset...")
         dataset      = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
         self.prompts = [
             x["text"] for x in dataset
-            if len(x["text"].strip()) > 100   # filter very short entries
+            if len(x["text"].strip()) > 100
         ]
         print(f"Loaded {len(self.prompts)} prompts.")
 
-        # ── Logging ───────────────────────────────────────────────────────
         self.log_rows = []
         os.makedirs(config["checkpoint_dir"], exist_ok=True)
-
     # ── Main training loop ────────────────────────────────────────────────
 
     def run(self):
@@ -77,7 +91,7 @@ class Trainer:
                 self.agent_a.model,
                 self.agent_a.tokenizer,
                 text,
-                device=self.device,
+                device=self.device_a,
             )
 
             # 5. Agent B detects watermark
@@ -112,45 +126,48 @@ class Trainer:
     # ── PPO update helpers ────────────────────────────────────────────────
 
     def _update_agent_a(self, prompt: str, old_logprobs: dict, reward: float):
-        reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device)
+        reward_tensor  = torch.tensor(reward, dtype=torch.float32).to(self.device_a)
         action_indices = old_logprobs["action_indices"]
 
         for _ in range(self.config["ppo_epochs"]):
-            # Fresh forward pass → fresh graph each epoch
-            fresh_head_out = self.agent_a.recompute_strategy_logprobs(prompt)
-
-            loss = self.agent_a.ppo_loss(
-                old_logprobs   = old_logprobs,
-                fresh_head_out = fresh_head_out,
-                action_indices = action_indices,
-                reward         = reward_tensor,
-            )
+            with torch.cuda.amp.autocast():
+                fresh_head_out = self.agent_a.recompute_strategy_logprobs(prompt)
+                loss = self.agent_a.ppo_loss(
+                    old_logprobs   = old_logprobs,
+                    fresh_head_out = fresh_head_out,
+                    action_indices = action_indices,
+                    reward         = reward_tensor,
+                )
             self.opt_a.zero_grad()
-            loss.backward()    # fresh graph every epoch — no retain_graph needed
+            self.scaler_a.scale(loss).backward()
+            self.scaler_a.unscale_(self.opt_a)
             torch.nn.utils.clip_grad_norm_(
                 list(self.agent_a.policy.parameters()) +
                 list(self.agent_a.model.parameters()),
-                1.0
+                1.0,
             )
-            self.opt_a.step()
+            self.scaler_a.step(self.opt_a)
+            self.scaler_a.update()
             torch.cuda.empty_cache()
 
     def _update_agent_b(self, pred_type, pred_span, text, reward: float):
-        reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device)
+        reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device_b)
 
         for _ in range(self.config["ppo_epochs"]):
-            # Fresh forward pass each epoch = fresh graph, no retain needed
-            _, _, new_logprobs = self.agent_b.detect(text)
-            loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward_tensor)
+            with torch.cuda.amp.autocast():
+                _, _, new_logprobs = self.agent_b.detect(text)
+                loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward_tensor)
             self.opt_b.zero_grad()
-            loss.backward()
+            self.scaler_b.scale(loss).backward()
+            self.scaler_b.unscale_(self.opt_b)
             torch.nn.utils.clip_grad_norm_(
                 list(self.agent_b.type_head.parameters()) +
                 list(self.agent_b.span_start_head.parameters()) +
                 list(self.agent_b.span_end_head.parameters()),
                 1.0,
             )
-            self.opt_b.step()
+            self.scaler_b.step(self.opt_b)
+            self.scaler_b.update()
             torch.cuda.empty_cache()
 
     # ── Logging & checkpointing ───────────────────────────────────────────
