@@ -186,17 +186,23 @@ class Trainer:
         )
 
     def _save(self, episode: int):
+        import glob
+        old = glob.glob(os.path.join(self.config["checkpoint_dir"], "ep*.pt"))
+        for f in old:
+            os.remove(f)
+
         path = os.path.join(self.config["checkpoint_dir"], f"ep{episode}.pt")
         torch.save({
-            "episode"       : episode,
-            "agent_a_policy": self.agent_a.policy.state_dict(),
-            "agent_b_heads" : {
-                "type" : self.agent_b.type_head.state_dict(),
-                "start": self.agent_b.span_start_head.state_dict(),
-                "end"  : self.agent_b.span_end_head.state_dict(),
+            "episode"        : episode,
+            "agent_a_policy" : self.agent_a.policy.state_dict(),
+            "agent_b_heads"  : {
+                "type"  : self.agent_b.type_head.state_dict(),
+                "start" : self.agent_b.span_start_head.state_dict(),
+                "end"   : self.agent_b.span_end_head.state_dict(),
             },
-            "opt_a"         : self.opt_a.state_dict(),
-            "opt_b"         : self.opt_b.state_dict(),
+            "opt_a"          : self.opt_a.state_dict(),
+            "opt_b"          : self.opt_b.state_dict(),
+            "strategy_history": self.env.strategy_history,
         }, path)
         print(f"Checkpoint saved → {path}")
 
