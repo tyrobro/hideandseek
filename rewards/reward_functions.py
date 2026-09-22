@@ -1,15 +1,11 @@
 # rewards/reward_functions.py
-# Standalone reward computations — imported by the environment and train loop.
+# Run 02: added reward clipping to prevent catastrophic policy updates
 
 import torch
 from typing import Tuple
 
 
 def compute_perplexity(model, tokenizer, text: str, device: str = "cpu") -> float:
-    """
-    Compute perplexity of text under the base LM.
-    Used as Agent A's fluency penalty — high PPL = watermark hurt quality.
-    """
     encodings = tokenizer(
         text,
         return_tensors="pt",
@@ -21,25 +17,23 @@ def compute_perplexity(model, tokenizer, text: str, device: str = "cpu") -> floa
 
     with torch.no_grad():
         outputs = model(**encodings, labels=input_ids)
-        loss = outputs.loss
+        loss    = outputs.loss
 
-    return torch.exp(loss).item()
+    ppl = torch.exp(loss).item()
+
+    # Cap returned PPL to prevent inf/nan from propagating
+    return min(ppl, 10000.0)
 
 
 def compute_iou(
     pred_span: Tuple[int, int],
     true_span: Tuple[int, int],
 ) -> float:
-    """
-    Token-level Intersection over Union between predicted and true watermark spans.
-    Both spans are (start_token_idx, end_token_idx) inclusive.
-    Returns a float in [0, 1].
-    """
     pred_start, pred_end = pred_span
     true_start, true_end = true_span
 
     intersection = max(0, min(pred_end, true_end) - max(pred_start, true_start))
-    union = max(1, max(pred_end, true_end) - min(pred_start, true_start))
+    union        = max(1, max(pred_end, true_end) - min(pred_start, true_start))
 
     return intersection / union
 
@@ -49,20 +43,15 @@ def compute_type_accuracy(pred_type: str, true_type: str) -> float:
 
 
 def compute_agent_rewards(
-    true_type: str,
-    true_span: Tuple[int, int],
-    pred_type: str,
-    pred_span: Tuple[int, int],
-    perplexity: float,
-    novelty_bonus: float,
-    config: dict,
+    true_type     : str,
+    true_span     : Tuple[int, int],
+    pred_type     : str,
+    pred_span     : Tuple[int, int],
+    perplexity    : float,
+    novelty_bonus : float,
+    config        : dict,
 ) -> Tuple[float, float]:
-    """
-    Core reward computation for both agents.
 
-    R_B =  alpha * IoU + beta * type_correct
-    R_A = -R_B - gamma_fluency * fluency_penalty + eta_novelty * novelty_bonus
-    """
     iou          = compute_iou(pred_span, true_span)
     type_correct = compute_type_accuracy(pred_type, true_type)
 
@@ -75,5 +64,9 @@ def compute_agent_rewards(
         - config["gamma_fluency"] * fluency_penalty
         + config["eta_novelty"]   * novelty_bonus
     )
+
+    # ── Reward clipping — prevents extreme values from blowing up policy ──
+    r_a = max(min(r_a, config["reward_clip_a_max"]), config["reward_clip_a_min"])
+    r_b = max(min(r_b, config["reward_clip_b_max"]), config["reward_clip_b_min"])
 
     return r_a, r_b

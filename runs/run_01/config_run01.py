@@ -17,7 +17,7 @@ CONFIG = {
     "min_gen_length" : 40,
 
     # ── RL / PPO ─────────────────────────────────────────────────────────
-    "ppo_epochs"   : 2,
+    "ppo_epochs"   : 4,
     "batch_size"   : 8,      # drop to 4 on free Colab
     "gamma"        : 0.99,
     "clip_epsilon" : 0.2,
@@ -27,21 +27,11 @@ CONFIG = {
     # ── Reward weights ───────────────────────────────────────────────────
     "alpha"         : 1.0,   # IoU weight
     "beta"          : 0.5,   # type classification weight
-    "gamma_fluency" : 1.5,   # fluency penalty weight (Agent A)
+    "gamma_fluency" : 0.3,   # fluency penalty weight (Agent A)
     "eta_novelty"   : 0.2,   # novelty bonus weight  (Agent A)
 
     # ── Fluency ──────────────────────────────────────────────────────────
-    "ppl_threshold" : 30.0,  # perplexity above this → penalty
-
-    # ── Reward clipping ──────────────────────────────────────────────────
-    "reward_clip_a_min" : -5.0,
-    "reward_clip_a_max" :  2.0,
-    "reward_clip_b_min" : -2.0,
-    "reward_clip_b_max" :  2.0,
-
-    # ── PPL emergency brake ──────────────────────────────────────────────
-    "ppl_brake" : 500.0,       # skip PPO update if PPL exceeds this
-
+    "ppl_threshold" : 50.0,  # perplexity above this → penalty
 
     # ── Training loop ────────────────────────────────────────────────────
     "num_episodes" : 10000,

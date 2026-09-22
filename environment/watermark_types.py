@@ -1,11 +1,20 @@
 # environment/watermark_types.py
-# Defines the four watermarking strategies Agent A can choose from.
-# Each function takes logits + parameters and returns (modified_logits, ground_truth_marker)
-# ground_truth_marker tells the environment WHERE and WHAT the watermark is.
+# All strategies now have hard intensity caps to prevent logit explosion
+# which was the root cause of PPL runaway in Run 01.
 
 import torch
 import random
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, Dict
+
+# ── Hard caps per strategy ────────────────────────────────────────────────────
+# These are the maximum bias magnitudes allowed regardless of what the
+# policy head requests. Prevents Agent A from destroying text quality.
+MAX_INTENSITY = {
+    "token"      : 1.5,
+    "syntactic"  : 1.0,   # was uncapped — biggest PPL offender in Run 01
+    "semantic"   : 1.0,
+    "positional" : 1.0,   # base bias also reduced from 3.0 → 1.5
+}
 
 
 def apply_token_watermark(
@@ -15,14 +24,8 @@ def apply_token_watermark(
     intensity: float = 1.0,
     seed: int = None,
 ) -> Tuple[torch.Tensor, Dict]:
-    """
-    KGW-style green/red list watermark.
-    Partitions the vocabulary and biases logits toward 'green' tokens.
+    intensity = min(intensity, MAX_INTENSITY["token"])   # hard cap
 
-    Returns:
-        logits: modified logits
-        marker: {"type": "token", "green_list": [...token ids...]}
-    """
     if seed is not None:
         random.seed(seed)
 
@@ -36,18 +39,11 @@ def apply_token_watermark(
 
 def apply_syntactic_watermark(
     logits: torch.Tensor,
-    pos_bias_tokens: List[int],
+    pos_bias_tokens,
     intensity: float = 1.0,
 ) -> Tuple[torch.Tensor, Dict]:
-    """
-    Biases generation toward tokens that produce specific syntactic patterns
-    (e.g., passive voice, subordinate clauses).
-    pos_bias_tokens: token ids associated with the target syntactic pattern.
+    intensity = min(intensity, MAX_INTENSITY["syntactic"])   # hard cap
 
-    Returns:
-        logits: modified logits
-        marker: {"type": "syntactic", "biased_tokens": [...]}
-    """
     if pos_bias_tokens:
         logits[:, pos_bias_tokens] += 1.5 * intensity
 
@@ -56,18 +52,11 @@ def apply_syntactic_watermark(
 
 def apply_semantic_watermark(
     logits: torch.Tensor,
-    synonym_map: Dict[int, int],
+    synonym_map: Dict,
     intensity: float = 1.0,
 ) -> Tuple[torch.Tensor, Dict]:
-    """
-    Biases generation toward specific synonym choices to embed a
-    meaning-preserving but statistically detectable semantic shift.
-    synonym_map: {original_token_id: preferred_synonym_token_id}
+    intensity = min(intensity, MAX_INTENSITY["semantic"])   # hard cap
 
-    Returns:
-        logits: modified logits
-        marker: {"type": "semantic", "preferred_tokens": [...]}
-    """
     preferred = list(synonym_map.values())
     for orig, pref in synonym_map.items():
         logits[:, pref] += 1.0 * intensity
@@ -79,28 +68,18 @@ def apply_positional_watermark(
     logits: torch.Tensor,
     position: int,
     total_length: int,
-    bias: float = 3.0,
+    bias: float = 1.5,      # was 3.0 in Run 01 — halved
     intensity: float = 1.0,
 ) -> Tuple[torch.Tensor, Dict]:
-    """
-    Concentrates the watermark in a specific positional window of the text.
-    The actual bias is strong within the window, zero outside.
-    Caller is responsible for only calling this at the right generation step.
+    intensity = min(intensity, MAX_INTENSITY["positional"])   # hard cap
 
-    Returns:
-        logits: modified logits (biased if within window)
-        marker: {"type": "positional", "span": (start, end)}
-    """
     span_size = max(5, total_length // 5)
-    start = min(position, total_length - span_size)
-    end = start + span_size
-    logits += bias * intensity   # caller only invokes this within window
+    start     = min(position, total_length - span_size)
+    end       = start + span_size
+    logits   += bias * intensity
 
     return logits, {"type": "positional", "span": (start, end)}
 
-
-# ── Strategy dispatcher ───────────────────────────────────────────────────────
-# Agent A's policy head indexes into this dict by strategy name.
 
 WATERMARK_STRATEGIES = {
     "token"      : apply_token_watermark,

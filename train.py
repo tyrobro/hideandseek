@@ -18,6 +18,9 @@ class Trainer:
     def __init__(self, config: dict):
         self.config = config
 
+        os.makedirs(config["checkpoint_dir"], exist_ok=True)
+        os.makedirs(os.path.dirname(config["log_path"]), exist_ok=True)
+
         # ── Assign one GPU per agent ───────────────────────────────────────
         if torch.cuda.device_count() >= 2:
             self.device_a = "cuda:0"   # Agent A (GPT-2 watermarker) 
@@ -93,6 +96,10 @@ class Trainer:
                 text,
                 device=self.device_a,
             )
+            if perplexity > 500:
+                if episode % self.config["log_every"] == 0:
+                    print(f"[Ep {episode}] Skipping PPO — PPL too high ({perplexity:.1f})")
+                continue
 
             # 5. Agent B detects watermark
             pred_type, pred_span, logprobs_b = self.agent_b.detect(text)
@@ -208,8 +215,8 @@ class Trainer:
 
     def _save_logs(self):
         df = pd.DataFrame(self.log_rows)
-        df.to_csv("training_log.csv", index=False)
-        print("Training log saved → training_log.csv")
+        df.to_csv(self.config["log_path"], index=False)
+        print("Training log saved → {self.config['log_path']}")
 
 
 if __name__ == "__main__":
