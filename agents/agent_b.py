@@ -129,6 +129,7 @@ class AgentB(nn.Module):
             "type" : type_lp,
             "start": start_lp,
             "end"  : end_lp,
+            "type_logits" : out["type_logits"],
         }
 
         return pred_type, pred_span, log_probs
