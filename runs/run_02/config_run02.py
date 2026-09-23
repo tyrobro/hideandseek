@@ -19,7 +19,7 @@ CONFIG = {
     # ── RL / PPO ─────────────────────────────────────────────────────────
     "ppo_epochs"   : 2,
     "batch_size"   : 8,      # drop to 4 on free Colab
-    "gamma"        : 2.0,
+    "gamma"        : 0.99,
     "clip_epsilon" : 0.2,
     "lr_agent_a"   : 1e-5,
     "lr_agent_b"   : 1e-4,
@@ -31,7 +31,7 @@ CONFIG = {
     "eta_novelty"   : 0.2,   # novelty bonus weight  (Agent A)
 
     # ── Fluency ──────────────────────────────────────────────────────────
-    "ppl_threshold" : 25.0,  # perplexity above this → penalty
+    "ppl_threshold" : 30.0,  # perplexity above this → penalty
 
     # ── Reward clipping ──────────────────────────────────────────────────
     "reward_clip_a_min" : -5.0,
@@ -40,16 +40,14 @@ CONFIG = {
     "reward_clip_b_max" :  2.0,
 
     # ── PPL emergency brake ──────────────────────────────────────────────
-    "ppl_brake" : 200.0,       # skip PPO update if PPL exceeds this
+    "ppl_brake" : 500.0,       # skip PPO update if PPL exceeds this
 
 
     # ── Training loop ────────────────────────────────────────────────────
     "num_episodes" : 10000,
     "log_every"    : 100,
     "save_every"   : 500,
-    "checkpoint_dir": "runs/run_03/checkpoints",
-    "log_path"      : "runs/run_03/results/training_log.csv",
-    "plot_path"     : "runs/run_03/results/training_curves.png",
+    "checkpoint_dir": "./checkpoints",
 
     # ── Novelty tracking ─────────────────────────────────────────────────
     "novelty_window": 20,    # how many past episodes to look back

@@ -22,7 +22,7 @@ class WatermarkPolicyHead(nn.Module):
       - position        (3 options: early / middle / late)
     """
 
-    INTENSITY_VALUES  = [0.5, 1.0, 2.0]       # maps index → actual intensity
+    INTENSITY_VALUES  = [0.3, 0.6, 1.0]       # maps index → actual intensity
     POSITION_FRACTIONS = [0.1, 0.45, 0.75]    # maps index → fraction of seq length
 
     def __init__(self, hidden_size: int, num_types: int = 4):

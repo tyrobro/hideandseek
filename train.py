@@ -182,6 +182,10 @@ class Trainer:
     def _log(self, episode: int, info: dict):
         row = {"episode": episode, **info}
         self.log_rows.append(row)
+        
+        recent_preds = [r["pred_type"] for r in self.log_rows[-20:]]
+        pred_counts  = {t: recent_preds.count(t) for t in self.config["watermark_types"]}
+
         print(
             f"[Ep {episode:>6}] "
             f"IoU={info['iou']:.3f} | "

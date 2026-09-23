@@ -156,4 +156,11 @@ class AgentB(nn.Module):
             loss    = -torch.min(ratio * reward, clipped * reward)
             losses.append(loss)
 
+            type_logits = new_logprobs.get("type_logits")
+            if type_logits is not None:
+                type_probs = torch.softmax(type_logits, dim = 1)
+                entropy = -(type_probs*torch.log(type_probs + 1e-9)).sum()
+                entropy_loss = -0.05*entropy
+                losses.append(entropy_loss)
+                
         return torch.stack(losses).mean()
