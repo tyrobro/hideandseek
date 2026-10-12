@@ -144,6 +144,20 @@ class AgentA(nn.Module):
         }
 
         return chosen_type, intensity, position_frac, log_probs, action_indices
+    
+    def update_ppl_tracker(self, ppl: float):
+            self.recent_ppls.append(ppl)
+            if len(self.recent_ppls) > 10:
+                self.recent_ppls.pop(0)
+    
+    def get_ppl_intensity_scale(self) -> float:
+        if len(self.recent_ppls) < 5:
+            return 1.0
+        recent_mean = sum(self.recent_ppls[-5:]) / 5
+        if recent_mean > 80:   return 0.3
+        elif recent_mean > 50: return 0.6
+        elif recent_mean > 30: return 0.8
+        else:                  return 1.0
     # ── Watermarked generation ────────────────────────────────────────────
 
     def generate(self, prompt: str) -> Tuple[str, str, Tuple[int, int], Dict]:
@@ -309,17 +323,3 @@ class AgentA(nn.Module):
             losses.append(-obj)
 
         return torch.stack(losses).mean()
-    
-    def update_ppl_tracker(self, ppl: float):
-        self.recent_ppls.append(ppl)
-        if len(self.recent_ppls) > 10:
-            self.recent_ppls.pop(0)
-
-    def get_ppl_intensity_scale(self) -> float:
-        if len(self.recent_ppls) < 5:
-            return 1.0
-        recent_mean = sum(self.recent_ppls[-5:]) / 5
-        if recent_mean > 80:   return 0.3
-        elif recent_mean > 50: return 0.6
-        elif recent_mean > 30: return 0.8
-        else:                  return 1.0
