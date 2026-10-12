@@ -29,7 +29,8 @@ class WatermarkPolicyHead(nn.Module):
         super().__init__()
         self.type_head      = nn.Linear(hidden_size, num_types)   # 4-way softmax
         self.intensity_head = nn.Linear(hidden_size, 3)           # 3-way softmax
-        self.position_head  = nn.Linear(hidden_size, 3)           # 3-way softmax
+        self.position_head  = nn.Linear(hidden_size, 3)   
+        
 
     def forward(self, hidden: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -110,7 +111,7 @@ class AgentA(nn.Module):
         vocab_size = self.tokenizer.vocab_size
         self.syntactic_bias_tokens = list(range(100, 200))          # placeholder
         self.semantic_synonym_map  = {i: i+1 for i in range(50)}   # placeholder
-
+        
     # ── Strategy selection ────────────────────────────────────────────────
 
     def select_strategy(self, prompt_hidden: torch.Tensor) -> Tuple:
@@ -127,7 +128,8 @@ class AgentA(nn.Module):
         chosen_type   = self.type_list[type_idx.item()]
         intensity     = WatermarkPolicyHead.INTENSITY_VALUES[intensity_idx.item()]
         position_frac = WatermarkPolicyHead.POSITION_FRACTIONS[position_idx.item()]
-
+        ppl_scale = self.get_ppl_intensity_scale()
+        intensity  = intensity * ppl_scale
         log_probs = {
             "type"      : type_dist.log_prob(type_idx).detach(),
             "intensity" : intensity_dist.log_prob(intensity_idx).detach(),
@@ -307,3 +309,17 @@ class AgentA(nn.Module):
             losses.append(-obj)
 
         return torch.stack(losses).mean()
+    
+    def update_ppl_tracker(self, ppl: float):
+        self.recent_ppls.append(ppl)
+        if len(self.recent_ppls) > 10:
+            self.recent_ppls.pop(0)
+
+    def get_ppl_intensity_scale(self) -> float:
+        if len(self.recent_ppls) < 5:
+            return 1.0
+        recent_mean = sum(self.recent_ppls[-5:]) / 5
+        if recent_mean > 80:   return 0.3
+        elif recent_mean > 50: return 0.6
+        elif recent_mean > 30: return 0.8
+        else:                  return 1.0

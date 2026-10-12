@@ -75,9 +75,9 @@ class AgentB(nn.Module):
         hidden = self.encoder(**encoding).last_hidden_state  # (1, seq_len, 768)
 
         # Classification: pool [CLS] token
-        cls_hidden   = hidden[:, 0, :]                         # (1, 768)
-        type_logits  = self.type_head(cls_hidden)              # (1, 4)
-
+        attention_mask = encoding["attention_mask"].unsqueeze(-1).float()
+        mean_hidden    = (hidden * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
+        type_logits    = self.type_head(mean_hidden)
         # Span: per-token start/end logits
         start_logits = self.span_start_head(hidden).squeeze(-1)  # (1, seq_len)
         end_logits   = self.span_end_head(hidden).squeeze(-1)    # (1, seq_len)

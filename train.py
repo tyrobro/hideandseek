@@ -96,6 +96,7 @@ class Trainer:
                 text,
                 device=self.device_a,
             )
+            self.agent_a.update_ppl_tracker(perplexity)
             if perplexity > 500:
                 if episode % self.config["log_every"] == 0:
                     print(f"[Ep {episode}] Skipping PPO — PPL too high ({perplexity:.1f})")

@@ -27,11 +27,11 @@ CONFIG = {
     # ── Reward weights ───────────────────────────────────────────────────
     "alpha"         : 1.0,   # IoU weight
     "beta"          : 0.5,   # type classification weight
-    "gamma_fluency" : 1.5,   # fluency penalty weight (Agent A)
+    "gamma_fluency" : 3.0,   # fluency penalty weight (Agent A)
     "eta_novelty"   : 0.2,   # novelty bonus weight  (Agent A)
 
     # ── Fluency ──────────────────────────────────────────────────────────
-    "ppl_threshold" : 25.0,  # perplexity above this → penalty
+    "ppl_threshold" : 20.0,  # perplexity above this → penalty
 
     # ── Reward clipping ──────────────────────────────────────────────────
     "reward_clip_a_min" : -5.0,
@@ -40,16 +40,16 @@ CONFIG = {
     "reward_clip_b_max" :  2.0,
 
     # ── PPL emergency brake ──────────────────────────────────────────────
-    "ppl_brake" : 200.0,       # skip PPO update if PPL exceeds this
+    "ppl_brake" : 100.0,       # skip PPO update if PPL exceeds this
 
 
     # ── Training loop ────────────────────────────────────────────────────
     "num_episodes" : 10000,
     "log_every"    : 100,
     "save_every"   : 500,
-    "checkpoint_dir": "runs/run_03/checkpoints",
-    "log_path"      : "runs/run_03/results/training_log.csv",
-    "plot_path"     : "runs/run_03/results/training_curves.png",
+    "checkpoint_dir": "runs/run_04/checkpoints",
+    "log_path"      : "runs/run_04/results/training_log.csv",
+    "plot_path"     : "runs/run_04/results/training_curves.png",
 
     # ── Novelty tracking ─────────────────────────────────────────────────
     "novelty_window": 20,    # how many past episodes to look back
