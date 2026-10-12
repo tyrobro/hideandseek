@@ -111,7 +111,7 @@ class AgentA(nn.Module):
         vocab_size = self.tokenizer.vocab_size
         self.syntactic_bias_tokens = list(range(100, 200))          # placeholder
         self.semantic_synonym_map  = {i: i+1 for i in range(50)}   # placeholder
-        
+        self.recent_ppls = [] 
     # ── Strategy selection ────────────────────────────────────────────────
 
     def select_strategy(self, prompt_hidden: torch.Tensor) -> Tuple:
