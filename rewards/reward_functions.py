@@ -55,17 +55,23 @@ def compute_agent_rewards(
     iou          = compute_iou(pred_span, true_span)
     type_correct = compute_type_accuracy(pred_type, true_type)
 
+    # Agent B reward: unchanged
     r_b = config["alpha"] * iou + config["beta"] * type_correct
 
+    # Agent A: explicit stealth bonus when B fails completely
+    stealth_bonus = config["stealth_bonus"] if (iou < 0.1 and type_correct == 0.0) else 0.0
+
+    # Fluency penalty: only above real gibberish threshold
     fluency_penalty = max(0.0, perplexity - config["ppl_threshold"]) / config["ppl_threshold"]
 
     r_a = (
-        -r_b
+        stealth_bonus
+        - config["alpha"] * iou
+        - config["beta"]  * type_correct
         - config["gamma_fluency"] * fluency_penalty
         + config["eta_novelty"]   * novelty_bonus
     )
 
-    # ── Reward clipping — prevents extreme values from blowing up policy ──
     r_a = max(min(r_a, config["reward_clip_a_max"]), config["reward_clip_a_min"])
     r_b = max(min(r_b, config["reward_clip_b_max"]), config["reward_clip_b_min"])
 
