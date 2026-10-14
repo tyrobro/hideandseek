@@ -1,4 +1,8 @@
-# Run 03 — True Entropy Fix + Intensity Reduction
+# Run 03
+
+## Background
+Previous "Run 03" accidentally used Run 02 code due to Kaggle not pulling
+latest git commits. This is the genuine first execution of Run 03 code.
 
 ## Changes from Run 02
 - Agent B: entropy bonus added to type head PPO loss (weight 0.05)
@@ -6,8 +10,8 @@
 - gamma_fluency: 1.5 → 2.0
 - ppl_threshold: 30.0 → 25.0
 - ppl_brake: 500.0 → 200.0
-- Note: Run 02 mislabelling fixed — this is the genuine first run with
-  these changes applied correctly
+- Agent B type head: still [CLS] pooling (mean pooling is Run 04)
+- PPL-aware intensity scaling: NOT present (Run 04 only)
 
 ## Config
 - base_model: gpt2
@@ -16,8 +20,6 @@
 - gamma_fluency: 2.0
 - ppl_threshold: 25.0
 - ppl_brake: 200.0
-- reward_clip_a: [-3.0, +1.0]
-- reward_clip_b: [-1.0, +2.0]
 - INTENSITY_VALUES: [0.3, 0.6, 1.0]
 - episodes: 10,000
 
@@ -32,34 +34,31 @@
 | positional | 0.115     |
 
 ### Key Metrics
-- PPL ep1-1500: mostly under 50 — best early performance across all runs
-- PPL ep1500+: climbs to 100-300, same explosion pattern as Run 02
-- Agent B diversity ep1-1500: excellent — predicts all 4 types correctly
-- Agent B ep2000+: collapses to "positional" again
-- IoU peak: 0.714 (ep4650), 0.563 (ep6150)
-- Agent A reward: hits -5.0 clip constantly from ep2350+
+- PPL ep1-800: consistently under 50 — best early performance yet
+- PPL onset of explosion: ep950 (62.6) → gradual climb to ep1700 (126)
+- Agent B diversity: genuine until ep~1900, then collapses to positional
+- R_A clip (-5.0) hit from ep1700 onwards constantly
+- IoU peaks: 0.714 (ep1300), 0.706 (ep1550), 0.695 (ep1800)
 
-## Critical Finding
-Early training (ep1-1500) looks exactly like the target behaviour:
-- PPL under 50
-- Agent B genuinely diverse
-- Both agents actually fighting
+## What Went Right
+- Entropy bonus confirmed working — Agent B diverse for first 1500+ episodes
+- Reduced intensity values confirmed working — PPL healthy for first 800 episodes
+- Both improvements together buy ~1500 clean episodes vs ~100 in Run 01
 
-Root cause of failure: PPL gradually climbs from ep750 onwards. Once PPL
-consistently exceeds ~60-80, generated text becomes near-incoherent and
-Agent B cannot extract meaningful signal from it, causing it to collapse
-to the most statistically safe prediction ("positional"). The two failure
-modes (PPL explosion + Agent B collapse) are the same bug — PPL causes B's
-collapse, not two independent problems.
+## Root Cause of Failure
+Missing PPL-aware intensity scaling (get_ppl_intensity_scale).
+Without it, Agent A's policy gradually learns to select intensity_idx=2
+(value=1.0) more frequently. Even at capped 1.0, repeated application
+across 80 tokens accumulates enough logit distortion to push PPL past 60.
+Once PPL > 60, Agent B can no longer read meaningful signal from the text
+and collapses to positional guessing. The two failure modes remain one bug.
 
-## What to Fix in Run 04
-- The intensity policy needs a HARD constraint during generation, not just
-  a cap on the values available. Agent A's policy learns to always pick
-  intensity_idx=2 (1.0) which is still too high for many strategies.
-- Add PPL-aware intensity scaling: if recent PPL trend is rising, force
-  Agent A to use lower intensity regardless of what its policy selects.
-- Strengthen entropy bonus: 0.05 → 0.15
-- Change Agent B type head from [CLS] to mean pooling
-- Weight type loss 3x over span loss in Agent B's PPO update
-- Lower ppl_brake: 200 → 100
-- Increase gamma_fluency: 2.0 → 3.0
+## What Run 04 Adds
+- get_ppl_intensity_scale: negative feedback loop — rising PPL automatically
+  reduces intensity, should keep PPL stable for all 10,000 episodes
+- Agent B mean pooling: full sequence context for type classification
+- Agent B type loss weighted 3x over span loss
+- Entropy bonus strengthened: 0.05 → 0.15
+- PPL brake tightened: 200 → 100
+- gamma_fluency: 2.0 → 3.0
+- ppl_threshold: 25.0 → 20.0
