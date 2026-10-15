@@ -71,10 +71,24 @@ class Trainer:
         os.makedirs(config["checkpoint_dir"], exist_ok=True)
     # ── Main training loop ────────────────────────────────────────────────
 
+        import glob
+        ckpts = sorted(glob.glob(os.path.join(config["checkpoint_dir"], "ep*.pt")))
+        if ckpts:
+            ckpt = torch.load(ckpts[-1], map_location="cpu")
+            self.agent_a.policy.load_state_dict(ckpt["agent_a_policy"])
+            self.agent_b.type_head.load_state_dict(ckpt["agent_b_heads"]["type"])
+            self.agent_b.span_start_head.load_state_dict(ckpt["agent_b_heads"]["start"])
+            self.agent_b.span_end_head.load_state_dict(ckpt["agent_b_heads"]["end"])
+            self.start_episode = ckpt["episode"] + 1
+            self.env.strategy_history = ckpt.get("strategy_history", [])
+            print(f"Resumed from ep {ckpt['episode']}")
+        else:
+            self.start_episode = 1
+
     def run(self):
         print(f"\nStarting Hide&Seek training for {self.config['num_episodes']} episodes...\n")
 
-        for episode in tqdm(range(1, self.config["num_episodes"] + 1)):
+        for episode in tqdm(range(self.start_episode, self.config["num_episodes"] + 1)):
             torch.cuda.empty_cache()
             # 1. Sample a prompt
             idx    = torch.randint(0, len(self.prompts), (1,)).item()
@@ -102,6 +116,15 @@ class Trainer:
             if perplexity > self.config["ppl_brake"]:
                 if episode % self.config["log_every"] == 0:
                     print(f"[Ep {episode}] Skipping PPO — PPL too high ({perplexity:.1f})")
+                    self.log_rows.append({
+                        "episode": episode, "iou": None, "type_correct": None,
+                        "perplexity": perplexity, "novelty_bonus": None,
+                        "reward_a": None, "reward_b": None,
+                        "true_type": None, "pred_type": None,
+                        "true_span": None, "pred_span": None,
+                        "chosen_type": None, "braked": True,
+                    })
+                    pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
                 continue
 
             # 5. Agent B detects watermark
@@ -186,6 +209,7 @@ class Trainer:
         row = {"episode": episode, **info}
         self.log_rows.append(row)
         
+        pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
         recent_preds = [r["pred_type"] for r in self.log_rows[-20:]]
         pred_counts  = {t: recent_preds.count(t) for t in self.config["watermark_types"]}
 

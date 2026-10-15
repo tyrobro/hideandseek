@@ -76,7 +76,7 @@ def apply_positional_watermark(
     span_size = max(5, total_length // 5)
     start     = min(position, total_length - span_size)
     end       = start + span_size
-    logits   += bias * intensity
+    logits   += min(bias*intensity, 1.0)
 
     return logits, {"type": "positional", "span": (start, end)}
 

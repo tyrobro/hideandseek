@@ -1,56 +1,32 @@
-# config.py
-# Central configuration for Hide&Seek
-# Override specific keys in the notebook for Colab/Kaggle constraints
-
 CONFIG = {
-    # ── Models ──────────────────────────────────────────────────────────
-    "base_model"      : "gpt2",                    # Agent A backbone
-    "detector_model"  : "distilbert-base-uncased", # Agent B backbone
-    # On free Colab swap base_model → "distilgpt2" to save VRAM
-
-    # ── Watermark strategies ─────────────────────────────────────────────
+    "base_model"      : "gpt2",
+    "detector_model"  : "distilbert-base-uncased",
     "watermark_types"     : ["token", "syntactic", "semantic", "positional"],
     "num_watermark_types" : 4,
-
-    # ── Text generation ──────────────────────────────────────────────────
     "max_gen_length" : 80,
     "min_gen_length" : 40,
-
-    # ── RL / PPO ─────────────────────────────────────────────────────────
     "ppo_epochs"   : 2,
-    "batch_size"   : 8,      # drop to 4 on free Colab
+    "batch_size"   : 8,
     "gamma"        : 2.0,
     "clip_epsilon" : 0.2,
     "lr_agent_a"   : 1e-5,
     "lr_agent_b"   : 1e-4,
-
-    # ── Reward weights ───────────────────────────────────────────────────
-    "alpha"         : 1.0,   # IoU weight
-    "beta"          : 0.5,   # type classification weight
-    "gamma_fluency" : 3.0,   # fluency penalty weight (Agent A)
-    "eta_novelty"   : 0.2,   # novelty bonus weight  (Agent A)
-
-    # ── Fluency ──────────────────────────────────────────────────────────
-    "ppl_threshold" : 20.0,  # perplexity above this → penalty
-
-    # ── Reward clipping ──────────────────────────────────────────────────
-    "reward_clip_a_min" : -5.0,
-    "reward_clip_a_max" :  2.0,
+    "alpha"         : 2.0,
+    "beta"          : 0.3,
+    "gamma_fluency" : 0.3,   # was 3.0
+    "eta_novelty"   : 0.2,
+    "stealth_bonus" : 1.5,   # NEW
+    "ppl_threshold" : 200.0, # was 20.0
+    "reward_clip_a_min" : -3.0,
+    "reward_clip_a_max" :  3.0,
     "reward_clip_b_min" : -2.0,
     "reward_clip_b_max" :  2.0,
-
-    # ── PPL emergency brake ──────────────────────────────────────────────
-    "ppl_brake" : 100.0,       # skip PPO update if PPL exceeds this
-
-
-    # ── Training loop ────────────────────────────────────────────────────
-    "num_episodes" : 10000,
-    "log_every"    : 100,
-    "save_every"   : 500,
-    "checkpoint_dir": "runs/run_04/checkpoints",
-    "log_path"      : "runs/run_04/results/training_log.csv",
-    "plot_path"     : "runs/run_04/results/training_curves.png",
-
-    # ── Novelty tracking ─────────────────────────────────────────────────
-    "novelty_window": 20,    # how many past episodes to look back
+    "ppl_brake"     : 500.0, # was 100.0
+    "num_episodes"  : 10000,
+    "log_every"     : 100,
+    "save_every"    : 500,
+    "checkpoint_dir": "runs/run_05/checkpoints",
+    "log_path"      : "runs/run_05/results/training_log.csv",
+    "plot_path"     : "runs/run_05/results/training_curves.png",
+    "novelty_window": 20,
 }
