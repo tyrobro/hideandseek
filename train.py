@@ -23,7 +23,7 @@ class Trainer:
 
         # ── Assign one GPU per agent ───────────────────────────────────────
         if torch.cuda.device_count() >= 2:
-            self.device_a = "cuda:0"   # Agent A (GPT-2 watermarker) 
+            self.device_a = "cuda:0"   # Agent A (GPT-2 watermarker)
             self.device_b = "cuda:1"   # Agent B (DistilBERT detector)
             print(f"Dual GPU mode: Agent A → {self.device_a} | Agent B → {self.device_b}")
         elif torch.cuda.device_count() == 1:
@@ -54,7 +54,7 @@ class Trainer:
             list(self.agent_b.span_end_head.parameters()),
             lr=config["lr_agent_b"],
         )
-# Mixed precision — cuts VRAM ~40-50% with negligible quality loss
+        # Mixed precision — cuts VRAM ~40-50% with negligible quality loss
         self.scaler_a = torch.amp.GradScaler(device='cuda')
         self.scaler_b = torch.amp.GradScaler(device='cuda')
 
@@ -69,7 +69,7 @@ class Trainer:
 
         self.log_rows = []
         os.makedirs(config["checkpoint_dir"], exist_ok=True)
-    # ── Main training loop ────────────────────────────────────────────────
+        # ── Main training loop ────────────────────────────────────────────
 
         import glob
         ckpts = sorted(glob.glob(os.path.join(config["checkpoint_dir"], "ep*.pt")))
@@ -81,7 +81,8 @@ class Trainer:
             self.agent_b.span_end_head.load_state_dict(ckpt["agent_b_heads"]["end"])
             self.start_episode = ckpt["episode"] + 1
             self.env.strategy_history = ckpt.get("strategy_history", [])
-            print(f"Resumed from ep {ckpt['episode']}")
+            self.log_rows = ckpt.get("log_rows", [])  # FIX 1: restore log rows on resume
+            print(f"Resumed from ep {ckpt['episode']} with {len(self.log_rows)} log rows")
         else:
             self.start_episode = 1
 
@@ -110,9 +111,9 @@ class Trainer:
                 text,
                 device=self.device_a,
             )
-            
+
             self.agent_a.update_ppl_tracker(perplexity)
-            
+
             if perplexity > self.config["ppl_brake"]:
                 if episode % self.config["log_every"] == 0:
                     print(f"[Ep {episode}] Skipping PPO — PPL too high ({perplexity:.1f})")
@@ -206,11 +207,10 @@ class Trainer:
     # ── Logging & checkpointing ───────────────────────────────────────────
 
     def _log(self, episode: int, info: dict):
-        row = {"episode": episode, **info}
+        row = {"episode": episode, "braked": False, **info}  # FIX 2: add braked=False
         self.log_rows.append(row)
-        
         pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
-        recent_preds = [r["pred_type"] for r in self.log_rows[-20:]]
+        recent_preds = [r.get("pred_type") for r in self.log_rows[-20:] if r.get("pred_type")]  # FIX 3: use .get()
         pred_counts  = {t: recent_preds.count(t) for t in self.config["watermark_types"]}
 
         print(
@@ -241,13 +241,14 @@ class Trainer:
             "opt_a"          : self.opt_a.state_dict(),
             "opt_b"          : self.opt_b.state_dict(),
             "strategy_history": self.env.strategy_history,
+            "log_rows"       : self.log_rows,  # FIX 4: save log rows to checkpoint
         }, path)
         print(f"Checkpoint saved → {path}")
 
     def _save_logs(self):
         df = pd.DataFrame(self.log_rows)
         df.to_csv(self.config["log_path"], index=False)
-        print("Training log saved → {self.config['log_path']}")
+        print(f"Training log saved → {self.config['log_path']}")  # FIX 5: missing f-string
 
 
 if __name__ == "__main__":
