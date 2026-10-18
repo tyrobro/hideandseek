@@ -173,7 +173,7 @@ class AgentA(nn.Module):
         # ── Step 1: Policy head selects strategy (needs grad) ────────────
         with torch.no_grad():
             outputs = self.model(**inputs, output_hidden_states=True)
-        prompt_hidden = outputs.hidden_states[-1].detach()
+        prompt_hidden = outputs.hidden_states[-1]
         del outputs
         torch.cuda.empty_cache()
 
