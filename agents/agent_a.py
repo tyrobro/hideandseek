@@ -114,28 +114,49 @@ class AgentA(nn.Module):
         self.recent_ppls = [] 
     # ── Strategy selection ────────────────────────────────────────────────
 
-    def select_strategy(self, prompt_hidden: torch.Tensor) -> Tuple:
+    def select_strategy(self, prompt_hidden: torch.Tensor, strategy_history: list = None) -> Tuple:
         head_out = self.policy(prompt_hidden)
 
-        n_episodes = len(self.recent_ppls)  # rough proxy for training progress
+        # Temperature annealing on type head — high entropy early, sharpens over time
+        # Uses strategy_history length as episode proxy; falls back to recent_ppls length
+        n_episodes = len(strategy_history) if strategy_history else len(self.recent_ppls)
         temp = max(1.0, 2.0 - n_episodes / 5000.0)  # 2.0 → 1.0 over ~5000 episodes
-        type_dist = torch.distributions.Categorical(logits=head_out["type_logits"] / temp)
-        type_idx      = type_dist.sample()
+
+        # Hard exploration floor: if one type dominates last 20 episodes, force uniform sample
+        if strategy_history and len(strategy_history) >= 20:
+            from collections import Counter
+            recent = strategy_history[-20:]
+            most_common_freq = Counter(recent).most_common(1)[0][1] / 20
+            if most_common_freq > 0.7:
+                type_idx = torch.randint(0, len(self.type_list), (1,)).squeeze().to(prompt_hidden.device)
+            else:
+                type_dist = torch.distributions.Categorical(logits=head_out["type_logits"] / temp)
+                type_idx = type_dist.sample()
+        else:
+            type_dist = torch.distributions.Categorical(logits=head_out["type_logits"] / temp)
+            type_idx = type_dist.sample()
+
+        intensity_dist = torch.distributions.Categorical(logits=head_out["intensity_logits"])
+        position_dist  = torch.distributions.Categorical(logits=head_out["position_logits"])
+
         intensity_idx = intensity_dist.sample()
         position_idx  = position_dist.sample()
 
         chosen_type   = self.type_list[type_idx.item()]
         intensity     = WatermarkPolicyHead.INTENSITY_VALUES[intensity_idx.item()]
         position_frac = WatermarkPolicyHead.POSITION_FRACTIONS[position_idx.item()]
-        ppl_scale = self.get_ppl_intensity_scale()
-        intensity  = intensity * ppl_scale
+        ppl_scale     = self.get_ppl_intensity_scale()
+        intensity     = intensity * ppl_scale
+
+        # Recompute type_dist for log_prob (needed whether we sampled from it or forced uniform)
+        type_dist_for_logprob = torch.distributions.Categorical(logits=head_out["type_logits"] / temp)
+
         log_probs = {
-            "type"      : type_dist.log_prob(type_idx).detach(),
+            "type"      : type_dist_for_logprob.log_prob(type_idx).detach(),
             "intensity" : intensity_dist.log_prob(intensity_idx).detach(),
             "position"  : position_dist.log_prob(position_idx).detach(),
         }
 
-        # Also store the action indices so PPO can recompute logprob of same action
         action_indices = {
             "type"      : type_idx.detach(),
             "intensity" : intensity_idx.detach(),
@@ -177,7 +198,7 @@ class AgentA(nn.Module):
         torch.cuda.empty_cache()
 
         chosen_type, intensity, position_frac, strategy_logprobs, action_indices = \
-            self.select_strategy(prompt_hidden)
+            self.select_strategy(prompt_hidden, strategy_history=self._strategy_history_ref)
         del prompt_hidden
         torch.cuda.empty_cache()
 
