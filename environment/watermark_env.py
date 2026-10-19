@@ -32,20 +32,13 @@ class WatermarkEnv:
     # ── Novelty bonus ─────────────────────────────────────────────────────
 
     def compute_novelty_bonus(self, chosen_type: str) -> float:
-        """
-        Rewards Agent A for strategic diversity.
-        Looks at the last `novelty_window` episodes.
-        Less frequent strategy → higher bonus.
-        """
         window = self.config["novelty_window"]
         recent = self.strategy_history[-window:]
-
         if not recent:
             return self.config["eta_novelty"]
-
         frequency = recent.count(chosen_type) / len(recent)
-        # bonus decays as frequency grows; 0 when used every episode
-        return max(0.0, self.config["eta_novelty"] * (1.0 - frequency))
+        # Penalty when overused: negative when frequency > 0.5
+        return self.config["eta_novelty"] * (1.0 - 2.0 * frequency)
 
     # ── Environment step ──────────────────────────────────────────────────
 

@@ -117,10 +117,9 @@ class AgentA(nn.Module):
     def select_strategy(self, prompt_hidden: torch.Tensor) -> Tuple:
         head_out = self.policy(prompt_hidden)
 
-        type_dist      = torch.distributions.Categorical(logits=head_out["type_logits"])
-        intensity_dist = torch.distributions.Categorical(logits=head_out["intensity_logits"])
-        position_dist  = torch.distributions.Categorical(logits=head_out["position_logits"])
-
+        n_episodes = len(self.recent_ppls)  # rough proxy for training progress
+        temp = max(1.0, 2.0 - n_episodes / 5000.0)  # 2.0 → 1.0 over ~5000 episodes
+        type_dist = torch.distributions.Categorical(logits=head_out["type_logits"] / temp)
         type_idx      = type_dist.sample()
         intensity_idx = intensity_dist.sample()
         position_idx  = position_dist.sample()
