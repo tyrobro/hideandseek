@@ -38,10 +38,10 @@ class Trainer:
         # ── Agents ────────────────────────────────────────────────────────
         self.agent_a = AgentA(config, self.device_a)
         self.agent_b = AgentB(config, self.device_b)
-        self.agent_a._strategy_history_ref = self.env.strategy_history
+        
         # ── Environment ───────────────────────────────────────────────────
         self.env = WatermarkEnv(config)
-
+        self.agent_a._strategy_history_ref = self.env.strategy_history
         # ── Optimizers ────────────────────────────────────────────────────
         self.opt_a = torch.optim.Adam(
             list(self.agent_a.policy.parameters()) +
