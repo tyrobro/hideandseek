@@ -13,20 +13,21 @@ CONFIG = {
     "lr_agent_b"   : 1e-4,
     "alpha"         : 2.0,
     "beta"          : 0.3,
-    "gamma_fluency" : 0.3,
+    "gamma_fluency" : 0.5,
     "eta_novelty"   : 0.2,
     "stealth_bonus" : 1.5,
-    "ppl_threshold" : 200.0,
+    "ppl_threshold" : 150.0,
     "reward_clip_a_min" : -3.0,
     "reward_clip_a_max" :  3.0,
     "reward_clip_b_min" : -2.0,
     "reward_clip_b_max" :  2.0,
-    "ppl_brake"     : 500.0,
-    "num_episodes"  : 20000,   # was 10000 — resume continues ep10001→20000
+    "ppl_brake"     : 300.0,
+    "num_episodes"  : 10000,   # was 10000 — resume continues ep10001→20000
     "log_every"     : 100,
     "save_every"    : 500,
     "checkpoint_dir": "runs/run_06/checkpoints",   # was run_05
     "log_path"      : "runs/run_06/results/training_log.csv",   # was run_05
     "plot_path"     : "runs/run_06/results/training_curves.png",   # was run_05
     "novelty_window": 20,
+    "entropy_coef_position": 0.01,
 }
