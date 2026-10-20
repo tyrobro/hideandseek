@@ -142,6 +142,7 @@ class Trainer:
                 pred_span        = pred_span,
                 perplexity       = perplexity,
                 chosen_type      = chosen_type,
+                position_frac= logprobs_a.get("position_frac")
             )
 
             # 7. PPO updates
@@ -177,7 +178,7 @@ class Trainer:
                 pos_dist = torch.distributions.Categorical(
                     logits=fresh_head_out["position_logits"]
                 )
-                loss = loss - self.config["entropy_coef_position"]*pos_dist.entropyy().mean()
+                loss = loss - self.config["entropy_coef_position"]*pos_dist.entropy().mean()
             self.opt_a.zero_grad()
             self.scaler_a.scale(loss).backward()
             self.scaler_a.unscale_(self.opt_a)
