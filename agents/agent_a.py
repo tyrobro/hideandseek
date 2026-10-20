@@ -142,6 +142,13 @@ class AgentA(nn.Module):
         intensity_idx = intensity_dist.sample()
         position_idx  = position_dist.sample()
 
+        if hasattr(self, '_position_history_ref') and self._position_history_ref and len(self._position_history_ref) >= 20:
+            from collections import Counter
+            recent_pos = self._position_history_ref[-20:]
+            most_common_pos_freq = Counter(recent_pos).most_common(1)[0][1] / 20
+            if most_common_pos_freq > 0.7:
+                position_idx = torch.randint(0, len(WatermarkPolicyHead.POSITION_FRACTIONS), (1,)).squeeze().to(prompt_hidden.device)
+        
         chosen_type   = self.type_list[type_idx.item()]
         intensity     = WatermarkPolicyHead.INTENSITY_VALUES[intensity_idx.item()]
         position_frac = WatermarkPolicyHead.POSITION_FRACTIONS[position_idx.item()]
@@ -207,7 +214,8 @@ class AgentA(nn.Module):
         wm_size   = max(5, max_new // 5)
         wm_end    = min(wm_start + wm_size, max_new - 1)
         true_span = (wm_start, wm_end)
-
+        if hasattr(self, '_position_history_ref'):
+            self._position_history_ref.append(position_frac)
         # ── Step 3: Apply logit processor for watermark ───────────────────
         # Instead of manual loop, use HF's logits_processor hook
         processor = WatermarkLogitsProcessor(
@@ -242,6 +250,7 @@ class AgentA(nn.Module):
             "strategy"       : strategy_logprobs,
             "action_indices" : action_indices,
             "tokens"         : None,
+            "position_frac" : position_frac,
         }
 
         return text, chosen_type, true_span, all_logprobs

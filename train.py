@@ -42,6 +42,7 @@ class Trainer:
         # ── Environment ───────────────────────────────────────────────────
         self.env = WatermarkEnv(config)
         self.agent_a._strategy_history_ref = self.env.strategy_history
+        self.agent_a._position_history_ref = self.env.position_history
         # ── Optimizers ────────────────────────────────────────────────────
         self.opt_a = torch.optim.Adam(
             list(self.agent_a.policy.parameters()) +
@@ -81,6 +82,7 @@ class Trainer:
             self.agent_b.span_end_head.load_state_dict(ckpt["agent_b_heads"]["end"])
             self.start_episode = ckpt["episode"] + 1
             self.env.strategy_history = ckpt.get("strategy_history", [])
+            self.env.position_history = ckpt.get("position_history", [])
             self.log_rows = ckpt.get("log_rows", [])  # FIX 1: restore log rows on resume
             print(f"Resumed from ep {ckpt['episode']} with {len(self.log_rows)} log rows")
         else:
@@ -172,6 +174,10 @@ class Trainer:
                     action_indices = action_indices,
                     reward         = reward_tensor,
                 )
+                pos_dist = torch.distributions.Categorical(
+                    logits=fresh_head_out["position_logits"]
+                )
+                loss = loss - self.config["entropy_coef_position"]*pos_dist.entropyy().mean()
             self.opt_a.zero_grad()
             self.scaler_a.scale(loss).backward()
             self.scaler_a.unscale_(self.opt_a)
@@ -207,7 +213,7 @@ class Trainer:
     # ── Logging & checkpointing ───────────────────────────────────────────
 
     def _log(self, episode: int, info: dict):
-        row = {"episode": episode, "braked": False, **info}  # FIX 2: add braked=False
+        row = {"episode": episode, "braked": False, "position_frac": info.get("position_frac"), **info}  # FIX 2: add braked=False
         self.log_rows.append(row)
         pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
         recent_preds = [r.get("pred_type") for r in self.log_rows[-20:] if r.get("pred_type")]  # FIX 3: use .get()
@@ -241,6 +247,7 @@ class Trainer:
             "opt_a"          : self.opt_a.state_dict(),
             "opt_b"          : self.opt_b.state_dict(),
             "strategy_history": self.env.strategy_history,
+            "position_history": self.env.position_history,
             "log_rows"       : self.log_rows,  # FIX 4: save log rows to checkpoint
         }, path)
         print(f"Checkpoint saved → {path}")

@@ -21,7 +21,7 @@ class WatermarkEnv:
         self.config           = config
         self.strategy_history = []   # tracks Agent A's choices for novelty
         self.episode_count    = 0
-
+        self.position_history = []
     # ── Episode management ────────────────────────────────────────────────
 
     def reset(self, prompt: str) -> Dict:
@@ -50,7 +50,8 @@ class WatermarkEnv:
         pred_type        : str,
         pred_span        : Tuple[int, int],   # Agent B's prediction
         perplexity       : float,
-        chosen_type      : str,               # what Agent A actually picked
+        chosen_type      : str,    
+        position_frac    : float = None,
     ) -> Tuple[float, float, Dict]:
         """
         Compute rewards and return episode info.
@@ -74,6 +75,7 @@ class WatermarkEnv:
 
         # Log strategy for future novelty computation
         self.strategy_history.append(chosen_type)
+        self.strategy_history.append(true_span)
 
         info = {
             "episode"      : self.episode_count,
@@ -88,6 +90,7 @@ class WatermarkEnv:
             "true_span"    : true_span,
             "pred_span"    : pred_span,
             "chosen_type"  : chosen_type,
+            "position_frac": position_frac,
         }
 
         return r_a, r_b, info
