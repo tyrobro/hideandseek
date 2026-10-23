@@ -110,7 +110,7 @@ class AgentA(nn.Module):
         # so the system is end-to-end runnable from day one.
         vocab_size = self.tokenizer.vocab_size
         self.syntactic_bias_tokens = list(range(100, 200))          # placeholder
-        self.semantic_synonym_map  = {i: i+1 for i in range(50)}   # placeholder
+        self.semantic_synonym_map  = {i: i + 10 for i in range(1000, 4000)}   # placeholder
         self.recent_ppls = [] 
     # ── Strategy selection ────────────────────────────────────────────────
 

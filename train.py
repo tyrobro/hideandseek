@@ -178,7 +178,8 @@ class Trainer:
                 pos_dist = torch.distributions.Categorical(
                     logits=fresh_head_out["position_logits"]
                 )
-                loss = loss - self.config["entropy_coef_position"]*pos_dist.entropy().mean()
+                if self.config["entropy_coef_position"] > 0:
+                    loss = loss - self.config["entropy_coef_position"] * pos_dist.entropy().mean()
             self.opt_a.zero_grad()
             self.scaler_a.scale(loss).backward()
             self.scaler_a.unscale_(self.opt_a)
