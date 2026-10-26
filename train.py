@@ -83,6 +83,8 @@ class Trainer:
             self.start_episode = ckpt["episode"] + 1
             self.env.strategy_history = ckpt.get("strategy_history", [])
             self.env.position_history = ckpt.get("position_history", [])
+            self.agent_a._strategy_history_ref = self.env.strategy_history
+            self.agent_a._position_history_ref = self.env.position_history
             self.log_rows = ckpt.get("log_rows", [])  # FIX 1: restore log rows on resume
             print(f"Resumed from ep {ckpt['episode']} with {len(self.log_rows)} log rows")
         else:
