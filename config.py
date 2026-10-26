@@ -13,7 +13,7 @@ CONFIG = {
     "lr_agent_b"   : 1e-4,
     "alpha"         : 2.0,
     "beta"          : 0.3,
-    "gamma_fluency" : 0.3,
+    "gamma_fluency" : 0.5,
     "eta_novelty"   : 0.5,
     "stealth_bonus" : 1.5,
     "ppl_threshold" : 200.0,
@@ -21,7 +21,7 @@ CONFIG = {
     "reward_clip_a_max" :  3.0,
     "reward_clip_b_min" : -2.0,
     "reward_clip_b_max" :  2.0,
-    "ppl_brake"     : 500.0,
+    "ppl_brake"     : 250.0,
     "num_episodes"  : 10000,   # was 10000 — resume continues ep10001→20000
     "log_every"     : 100,
     "save_every"    : 500,
