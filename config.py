@@ -30,4 +30,5 @@ CONFIG = {
     "plot_path"     : "runs/run_06/results/training_curves.png",   # was run_05
     "novelty_window": 20,
     "entropy_coef_position": 0.01,
+    "force_strategy": "syntactic",
 }
