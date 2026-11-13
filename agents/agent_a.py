@@ -59,10 +59,7 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         self.agent     = agent     # reference to AgentA for _apply_strategy
         self.max_new   = max_new
         self.step      = 0         # tracks generation step
-        self.ref_model = GPT2LMHeadModel.from_pretrained(CONFIG["base_model"]).to(device)
-        self.ref_model.eval()
-        for p in self.ref_model.parameters():
-            p.requires_grad = False 
+         
 
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         # Only apply watermark within the designated window
@@ -103,6 +100,10 @@ class AgentA(nn.Module):
             config["base_model"],
             output_hidden_states=True,
         ).to(device)
+        self.ref_model = GPT2LMHeadModel.from_pretrained(config["base_model"]).to(device)
+        self.ref_model.eval()
+        for p in self.ref_model.parameters():
+            p.requires_grad = False
 
         # ── Policy head ───────────────────────────────────────────────────
         hidden_size  = self.model.config.hidden_size
