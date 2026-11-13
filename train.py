@@ -118,19 +118,20 @@ class Trainer:
 
             self.agent_a.update_ppl_tracker(perplexity)
 
-            if perplexity > self.config["ppl_brake"]:
-                if episode % self.config["log_every"] == 0:
-                    print(f"[Ep {episode}] Skipping PPO — PPL too high ({perplexity:.1f})")
-                    self.log_rows.append({
-                        "episode": episode, "iou": None, "type_correct": None,
-                        "perplexity": perplexity, "novelty_bonus": None,
-                        "reward_a": None, "reward_b": None,
-                        "true_type": None, "pred_type": None,
-                        "true_span": None, "pred_span": None,
-                        "chosen_type": None, "braked": True,
-                    })
-                    pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
-                continue
+        if perplexity > self.config["ppl_brake"]:
+            fluency_loss = self.agent_a.compute_fluency_loss(text)
+            kl_loss      = self.agent_a.compute_kl_to_ref(text)
+            corrective_loss = self.config.get("fluency_loss_coef", 0.1) * fluency_loss + \
+                            self.config.get("kl_coef", 0.05) * kl_loss
+            self.opt_a.zero_grad()
+            corrective_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.agent_a.model.parameters(), 1.0)
+            self.opt_a.step()
+
+            if episode % self.config["log_every"] == 0:
+                print(f"[Ep {episode}] Skipping PPO policy update — PPL too high ({perplexity:.1f}), applying corrective fluency step")
+                self.log_rows.append({...})  # unchanged
+                pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
 
             # 5. Agent B detects watermark
             pred_type, pred_span, logprobs_b = self.agent_b.detect(text)
@@ -148,7 +149,7 @@ class Trainer:
             )
 
             # 7. PPO updates
-            self._update_agent_a(prompt, logprobs_a, r_a)
+            self._update_agent_a(prompt, text, logprobs_a, r_a)
             self._update_agent_b(pred_type, pred_span, text, r_b)
 
             # 8. Logging
@@ -164,30 +165,36 @@ class Trainer:
 
     # ── PPO update helpers ────────────────────────────────────────────────
 
-    def _update_agent_a(self, prompt: str, old_logprobs: dict, reward: float):
+    def _update_agent_a(self, prompt: str, text: str, old_logprobs: dict, reward: float):
         reward_tensor  = torch.tensor(reward, dtype=torch.float32).to(self.device_a)
         action_indices = old_logprobs["action_indices"]
 
+        fluency_coef = self.config.get("fluency_loss_coef", 0.1)
+        kl_coef      = self.config.get("kl_coef", 0.05)
+
         for _ in range(self.config["ppo_epochs"]):
-            with torch.amp.autocast(device_type = 'cuda'):
+            with torch.amp.autocast(device_type='cuda'):
                 fresh_head_out = self.agent_a.recompute_strategy_logprobs(prompt)
-                loss = self.agent_a.ppo_loss(
+                policy_loss = self.agent_a.ppo_loss(
                     old_logprobs   = old_logprobs,
                     fresh_head_out = fresh_head_out,
                     action_indices = action_indices,
                     reward         = reward_tensor,
                 )
-                pos_dist = torch.distributions.Categorical(
-                    logits=fresh_head_out["position_logits"]
-                )
+                pos_dist = torch.distributions.Categorical(logits=fresh_head_out["position_logits"])
                 if self.config["entropy_coef_position"] > 0:
-                    loss = loss - self.config["entropy_coef_position"] * pos_dist.entropy().mean()
+                    policy_loss = policy_loss - self.config["entropy_coef_position"] * pos_dist.entropy().mean()
+
+                fluency_loss = self.agent_a.compute_fluency_loss(text)
+                kl_loss      = self.agent_a.compute_kl_to_ref(text)
+
+                loss = policy_loss + fluency_coef * fluency_loss + kl_coef * kl_loss
+
             self.opt_a.zero_grad()
             self.scaler_a.scale(loss).backward()
             self.scaler_a.unscale_(self.opt_a)
             torch.nn.utils.clip_grad_norm_(
-                list(self.agent_a.policy.parameters()) +
-                list(self.agent_a.model.parameters()),
+                list(self.agent_a.policy.parameters()) + list(self.agent_a.model.parameters()),
                 1.0,
             )
             self.scaler_a.step(self.opt_a)

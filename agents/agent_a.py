@@ -59,6 +59,10 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         self.agent     = agent     # reference to AgentA for _apply_strategy
         self.max_new   = max_new
         self.step      = 0         # tracks generation step
+        self.ref_model = GPT2LMHeadModel.from_pretrained(CONFIG["base_model"]).to(device)
+        self.ref_model.eval()
+        for p in self.ref_model.parameters():
+            p.requires_grad = False 
 
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         # Only apply watermark within the designated window
@@ -352,3 +356,20 @@ class AgentA(nn.Module):
             losses.append(-obj)
 
         return torch.stack(losses).mean()
+    
+    def compute_fluency_loss(self, text: str) -> torch.Tensor:
+        """Mean token NLL on the generated text — differentiable, unlike compute_perplexity."""
+        enc = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=128).to(self.device)
+        out = self.model(**enc, labels=enc["input_ids"])
+        return out.loss   # mean NLL, requires_grad=True since self.model is trainable
+
+    def compute_kl_to_ref(self, text: str) -> torch.Tensor:
+        """KL(current_model || ref_model) on the same tokens — bounds total drift."""
+        enc = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=128).to(self.device)
+        logits = self.model(**enc).logits
+        with torch.no_grad():
+            ref_logits = self.ref_model(**enc).logits
+        log_p = F.log_softmax(logits, dim=-1)
+        log_q = F.log_softmax(ref_logits, dim=-1)
+        kl = F.kl_div(log_p, log_q, log_target=True, reduction="batchmean")
+        return kl
