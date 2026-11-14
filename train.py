@@ -118,25 +118,25 @@ class Trainer:
 
             self.agent_a.update_ppl_tracker(perplexity)
 
-        if perplexity > self.config["ppl_brake"]:
-            fluency_loss = self.agent_a.compute_fluency_loss(text)
-            kl_loss      = self.agent_a.compute_kl_to_ref(text)
-            corrective_loss = self.config.get("fluency_loss_coef", 0.1) * fluency_loss + \
-                            self.config.get("kl_coef", 0.05) * kl_loss
-            self.opt_a.zero_grad()
-            corrective_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.agent_a.model.parameters(), 1.0)
-            self.opt_a.step()
+            if perplexity > self.config["ppl_brake"]:
+                fluency_loss = self.agent_a.compute_fluency_loss(text)
+                kl_loss      = self.agent_a.compute_kl_to_ref(text)
+                corrective_loss = self.config.get("fluency_loss_coef", 0.1) * fluency_loss + \
+                                self.config.get("kl_coef", 0.05) * kl_loss
+                self.opt_a.zero_grad()
+                corrective_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.agent_a.model.parameters(), 1.0)
+                self.opt_a.step()
 
-            if episode % self.config["log_every"] == 0:
-                print(f"[Ep {episode}] Skipping PPO policy update — PPL too high ({perplexity:.1f}), applying corrective fluency step")
-                self.log_rows.append({...})  # unchanged
-                pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
-
+                if episode % self.config["log_every"] == 0:
+                    print(f"[Ep {episode}] Skipping PPO policy update — PPL too high ({perplexity:.1f}), applying corrective fluency step")
+                    self.log_rows.append({...})  # unchanged
+                    pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
+                continue
             # 5. Agent B detects watermark
             pred_type, pred_span, logprobs_b = self.agent_b.detect(text)
 
-            # 6. Environment step → rewards
+                # 6. Environment step → rewards
             r_a, r_b, info = self.env.step(
                 watermarked_text = text,
                 true_type        = chosen_type,
@@ -148,15 +148,15 @@ class Trainer:
                 position_frac= logprobs_a.get("position_frac")
             )
 
-            # 7. PPO updates
+                # 7. PPO updates
             self._update_agent_a(prompt, text, logprobs_a, r_a)
             self._update_agent_b(pred_type, pred_span, text, r_b)
 
-            # 8. Logging
+                # 8. Logging
             if episode % self.config["log_every"] == 0:
                 self._log(episode, info)
 
-            # 9. Checkpoint
+                # 9. Checkpoint
             if episode % self.config["save_every"] == 0:
                 self._save(episode)
 
@@ -165,6 +165,14 @@ class Trainer:
 
     # ── PPO update helpers ────────────────────────────────────────────────
 
+    def _corrective_step(self, text: str):
+        loss = (self.config.get("fluency_loss_coef", 0.1) * self.agent_a.compute_fluency_loss(text)
+              + self.config.get("kl_coef", 0.05) * self.agent_a.compute_kl_to_ref(text))
+        self.opt_a.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.agent_a.model.parameters(), 1.0)
+        self.opt_a.step()
+        
     def _update_agent_a(self, prompt: str, text: str, old_logprobs: dict, reward: float):
         reward_tensor  = torch.tensor(reward, dtype=torch.float32).to(self.device_a)
         action_indices = old_logprobs["action_indices"]
