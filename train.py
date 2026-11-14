@@ -12,6 +12,7 @@ from environment.watermark_env import WatermarkEnv
 from agents.agent_a import AgentA
 from agents.agent_b import AgentB
 from config import CONFIG
+from collections import deque
 
 
 class Trainer:
@@ -69,6 +70,9 @@ class Trainer:
         print(f"Loaded {len(self.prompts)} prompts.")
 
         self.log_rows = []
+        self.b_baseline = None
+        self.b_diag     = {}
+        self.type_hist  = deque(maxlen=50)
         os.makedirs(config["checkpoint_dir"], exist_ok=True)
         # ── Main training loop ────────────────────────────────────────────
 
@@ -119,18 +123,16 @@ class Trainer:
             self.agent_a.update_ppl_tracker(perplexity)
 
             if perplexity > self.config["ppl_brake"]:
-                fluency_loss = self.agent_a.compute_fluency_loss(text)
-                kl_loss      = self.agent_a.compute_kl_to_ref(text)
-                corrective_loss = self.config.get("fluency_loss_coef", 0.1) * fluency_loss + \
-                                self.config.get("kl_coef", 0.05) * kl_loss
-                self.opt_a.zero_grad()
-                corrective_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.agent_a.model.parameters(), 1.0)
-                self.opt_a.step()
-
+                self._corrective_step(text)
                 if episode % self.config["log_every"] == 0:
-                    print(f"[Ep {episode}] Skipping PPO policy update — PPL too high ({perplexity:.1f}), applying corrective fluency step")
-                    self.log_rows.append({...})  # unchanged
+                    print(f"[Ep {episode}] BRAKED — PPL {perplexity:.1f}, corrective fluency step applied")
+                    self.log_rows.append({
+                        "episode": episode, "iou": None, "type_correct": None,
+                        "perplexity": perplexity, "novelty_bonus": None,
+                        "reward_a": None, "reward_b": None, "true_type": None,
+                        "pred_type": None, "true_span": None, "pred_span": None,
+                        "chosen_type": None, "braked": True,
+                    })
                     pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
                 continue
             # 5. Agent B detects watermark
@@ -147,10 +149,12 @@ class Trainer:
                 chosen_type      = chosen_type,
                 position_frac= logprobs_a.get("position_frac")
             )
+            
+            self.type_hist.append(float(info["type_correct"]))
 
                 # 7. PPO updates
             self._update_agent_a(prompt, text, logprobs_a, r_a)
-            self._update_agent_b(pred_type, pred_span, text, r_b)
+            self._update_agent_b(pred_type, pred_span, text, logprobs_b, r_b)
 
                 # 8. Logging
             if episode % self.config["log_every"] == 0:
@@ -209,35 +213,44 @@ class Trainer:
             self.scaler_a.update()
             torch.cuda.empty_cache()
 
-    def _update_agent_b(self, pred_type, pred_span, text, reward: float):
-        reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device_b)
-
+    def _update_agent_b(self, pred_type, pred_span, text, old_logprobs_b, reward: float):
+        if self.b_baseline is None:
+            self.b_baseline = reward
+        advantage       = reward - self.b_baseline
+        self.b_baseline = 0.98 * self.b_baseline + 0.02 * reward
+        adv_t = torch.tensor(advantage, dtype=torch.float32, device=self.device_b)
+        head_params = (list(self.agent_b.type_head.parameters()) +
+                        list(self.agent_b.span_start_head.parameters()) +
+                        list(self.agent_b.span_end_head.parameters()))
+    
         for _ in range(self.config["ppo_epochs"]):
-            with torch.amp.autocast(device_type = 'cuda'):
-                _, _, new_logprobs = self.agent_b.detect(text)
-                loss = self.agent_b.ppo_loss(new_logprobs, new_logprobs, reward_tensor)
+            with torch.amp.autocast(device_type='cuda'):
+                new_lp = self.agent_b.evaluate(text, pred_type, pred_span)
+                loss   = self.agent_b.ppo_loss(old_logprobs_b, new_lp, adv_t,
+                                            self.config.get("entropy_coef_b", 0.01))
             self.opt_b.zero_grad()
             self.scaler_b.scale(loss).backward()
             self.scaler_b.unscale_(self.opt_b)
-            torch.nn.utils.clip_grad_norm_(
-                list(self.agent_b.type_head.parameters()) +
-                list(self.agent_b.span_start_head.parameters()) +
-                list(self.agent_b.span_end_head.parameters()),
-                1.0,
-            )
+            grad_norm = torch.nn.utils.clip_grad_norm_(head_params, 1.0)
             self.scaler_b.step(self.opt_b)
             self.scaler_b.update()
             torch.cuda.empty_cache()
+    
+            self.b_diag = {"b_grad_norm": float(grad_norm),
+                        "b_type_entropy": float(new_lp["type_entropy"]),
+                        "b_advantage": advantage}
 
     # ── Logging & checkpointing ───────────────────────────────────────────
 
     def _log(self, episode: int, info: dict):
         row = {"episode": episode, "braked": False, "position_frac": info.get("position_frac"), **info}  # FIX 2: add braked=False
+        row.update(self.b_diag)
+        row["type_acc_win"] = sum(self.type_hist) / max(1, len(self.type_hist))
         self.log_rows.append(row)
         pd.DataFrame(self.log_rows).to_csv(self.config["log_path"], index=False)
         recent_preds = [r.get("pred_type") for r in self.log_rows[-20:] if r.get("pred_type")]  # FIX 3: use .get()
         pred_counts  = {t: recent_preds.count(t) for t in self.config["watermark_types"]}
-
+        
         print(
             f"[Ep {episode:>6}] "
             f"IoU={info['iou']:.3f} | "
@@ -245,7 +258,9 @@ class Trainer:
             f"PPL={info['perplexity']:.1f} | "
             f"R_A={info['reward_a']:+.3f} | "
             f"R_B={info['reward_b']:+.3f} | "
-            f"Strategy={info['chosen_type']}"
+            f"Strategy={info['chosen_type']} | "
+            f"TypeAcc50={row['type_acc_win']:.2f} | "
+            f"B_H= {self.b_diag.get('b_type_entropy', float('nan')):.2f}"
         )
 
     def _save(self, episode: int):

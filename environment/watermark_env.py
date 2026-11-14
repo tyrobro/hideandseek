@@ -35,10 +35,10 @@ class WatermarkEnv:
         window = self.config["novelty_window"]
         recent = self.strategy_history[-window:]
         if not recent:
-            return self.config["eta_novelty"]
+            return 1.0
         frequency = recent.count(chosen_type) / len(recent)
         # Penalty when overused: negative when frequency > 0.5
-        return self.config["eta_novelty"] * (1.0 - 2.0 * frequency)
+        return (1.0 - 2.0 * frequency)
 
     # ── Environment step ──────────────────────────────────────────────────
 
@@ -61,8 +61,8 @@ class WatermarkEnv:
             r_b   : Agent B's scalar reward
             info  : logging dict
         """
-        novelty_bonus = self.compute_novelty_bonus(chosen_type)
-
+        novelty_bonus = 0.0 if self.config.get("force_strategy") else self.compute_novelty_bonus(chosen_type)
+        
         r_a, r_b = compute_agent_rewards(
             true_type     = true_type,
             true_span     = true_span,
@@ -75,8 +75,7 @@ class WatermarkEnv:
 
         # Log strategy for future novelty computation
         self.strategy_history.append(chosen_type)
-        self.strategy_history.append(true_span)
-
+        
         info = {
             "episode"      : self.episode_count,
             "iou"          : compute_iou(pred_span, true_span),

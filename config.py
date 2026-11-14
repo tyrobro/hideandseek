@@ -33,4 +33,5 @@ CONFIG = {
     "force_strategy": "syntactic",
     "fluency_loss_coef": 0.1,
     "kl_coef": 0.05,
+    "entropy_coef_b": 0.01,
 }

@@ -90,7 +90,7 @@ class AgentB(nn.Module):
         }
 
     # ── Detection (inference) ─────────────────────────────────────────────
-
+    @torch.no_grad()
     def detect(self, text: str) -> Tuple[str, Tuple[int, int], Dict]:
         """
         Run detection on a piece of text.
@@ -134,34 +134,29 @@ class AgentB(nn.Module):
 
         return pred_type, pred_span, log_probs
 
+    def evaluate(self, text: str, pred_type: str, pred_span: Tuple[int, int]) -> Dict:
+        """Log-prob of the actions B actually took, under the current weights."""
+        out   = self.forward(text)
+        start, end = pred_span
+        type_lp  = F.log_softmax(out["type_logits"], dim=-1)[0, self.type_list.index(pred_type)]
+        start_lp = F.log_softmax(out["start_logits"], dim=-1)[0, start]
+        end_logits = out["end_logits"].clone()
+        end_logits[:, :start] = -1e9
+        end_lp   = F.log_softmax(end_logits, dim=-1)[0, end]
+        probs    = F.softmax(out["type_logits"], dim=-1)
+        entropy  = -(probs * torch.log(probs + 1e-9)).sum()
+        return {"type": type_lp, "start": start_lp, "end": end_lp, "type_entropy": entropy}
     # ── PPO update ────────────────────────────────────────────────────────
 
-    def ppo_loss(
-        self,
-        old_logprobs : Dict,
-        new_logprobs : Dict,
-        reward       : float,
-    ) -> torch.Tensor:
-        """
-        Clipped PPO objective for Agent B.
-        Reward is positive (B wants high IoU + type accuracy).
-        """
+    def ppo_loss(self, old_logprobs: Dict, new_logprobs: Dict,
+                 advantage: torch.Tensor, entropy_coef: float = 0.0) -> torch.Tensor:
         clip_eps = self.config["clip_epsilon"]
-        losses   = []
-
+        losses = []
         for key in ["type", "start", "end"]:
-            old_lp  = old_logprobs[key].detach()
-            new_lp  = new_logprobs[key]
-            ratio   = torch.exp(new_lp - old_lp)
+            ratio   = torch.exp(new_logprobs[key] - old_logprobs[key].detach())
             clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
-            loss    = -torch.min(ratio * reward, clipped * reward)
-            losses.append(loss)
-
-            type_logits = new_logprobs.get("type_logits")
-            if type_logits is not None:
-                type_probs = torch.softmax(type_logits, dim = 1)
-                entropy = -(type_probs*torch.log(type_probs + 1e-9)).sum()
-                entropy_loss = -(0.15*entropy).unsqueeze(0)
-                losses.append(entropy_loss)
-                
-        return torch.stack(losses).mean()
+            losses.append(-torch.min(ratio * advantage, clipped * advantage))
+        loss = torch.stack(losses).mean()
+        if entropy_coef > 0:
+            loss = loss - entropy_coef * new_logprobs["type_entropy"]
+        return loss
