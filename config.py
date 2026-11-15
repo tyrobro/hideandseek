@@ -25,13 +25,16 @@ CONFIG = {
     "num_episodes"  : 10000,   # was 10000 — resume continues ep10001→20000
     "log_every"     : 50,
     "save_every"    : 500,
-    "checkpoint_dir": "runs/run_13/checkpoints",   # was run_05
-    "log_path"      : "runs/run_13/results/training_log.csv",   # was run_05
-    "plot_path"     : "runs/run_13/results/training_curves.png",   # was run_05
+    "checkpoint_dir": "runs/run_14/checkpoints",   # was run_05
+    "log_path"      : "runs/run_14/results/training_log.csv",   # was run_05
+    "plot_path"     : "runs/run_14/results/training_curves.png",   # was run_05
     "novelty_window": 20,
     "entropy_coef_position": 0.0,
-    "force_strategy": "syntactic",
     "fluency_loss_coef": 0.1,
     "kl_coef": 0.05,
     "entropy_coef_b": 0.01,
+    "random_policy": False, 
+    "freeze_agent_a": False,
+    "lr_backbone_a": 1e-6, 
+    "min_unique_ratio": 0.0,
 }
