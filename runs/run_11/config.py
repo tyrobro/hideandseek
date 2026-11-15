@@ -22,7 +22,7 @@ CONFIG = {
     "reward_clip_b_min" : -2.0,
     "reward_clip_b_max" :  2.0,
     "ppl_brake"     : 250.0,
-    "num_episodes"  : 10000,   # was 10000 — resume continues ep10001→20000
+    "num_episodes"  : 10000,   
     "log_every"     : 50,
     "save_every"    : 500,
     "checkpoint_dir": "runs/run_11/checkpoints",   # was run_05

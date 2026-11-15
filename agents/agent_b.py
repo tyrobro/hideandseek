@@ -71,8 +71,9 @@ class AgentB(nn.Module):
             max_length=512,
             padding=True,
         ).to(self.device)
-
-        hidden = self.encoder(**encoding).last_hidden_state  # (1, seq_len, 768)
+        
+        with torch.no_grad():
+            hidden = self.encoder(**encoding).last_hidden_state  # (1, seq_len, 768)
 
         # Classification: pool [CLS] token
         attention_mask = encoding["attention_mask"].unsqueeze(-1).float()
@@ -149,13 +150,14 @@ class AgentB(nn.Module):
     # ── PPO update ────────────────────────────────────────────────────────
 
     def ppo_loss(self, old_logprobs: Dict, new_logprobs: Dict,
-                 advantage: torch.Tensor, entropy_coef: float = 0.0) -> torch.Tensor:
+                 adv_type: torch.Tensor, adv_span: torch.Tensor,
+                 entropy_coef: float = 0.0) -> torch.Tensor:
         clip_eps = self.config["clip_epsilon"]
         losses = []
-        for key in ["type", "start", "end"]:
+        for key, adv in (("type", adv_type), ("start", adv_span), ("end", adv_span)):
             ratio   = torch.exp(new_logprobs[key] - old_logprobs[key].detach())
             clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
-            losses.append(-torch.min(ratio * advantage, clipped * advantage))
+            losses.append(-torch.min(ratio * adv, clipped * adv))
         loss = torch.stack(losses).mean()
         if entropy_coef > 0:
             loss = loss - entropy_coef * new_logprobs["type_entropy"]

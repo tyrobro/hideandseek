@@ -25,9 +25,9 @@ CONFIG = {
     "num_episodes"  : 10000,   # was 10000 — resume continues ep10001→20000
     "log_every"     : 50,
     "save_every"    : 500,
-    "checkpoint_dir": "runs/run_12/checkpoints",   # was run_05
-    "log_path"      : "runs/run_12/results/training_log.csv",   # was run_05
-    "plot_path"     : "runs/run_12/results/training_curves.png",   # was run_05
+    "checkpoint_dir": "runs/run_13/checkpoints",   # was run_05
+    "log_path"      : "runs/run_13/results/training_log.csv",   # was run_05
+    "plot_path"     : "runs/run_13/results/training_curves.png",   # was run_05
     "novelty_window": 20,
     "entropy_coef_position": 0.0,
     "force_strategy": "syntactic",

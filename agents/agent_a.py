@@ -154,10 +154,15 @@ class AgentA(nn.Module):
             if most_common_pos_freq > 0.7:
                 position_idx = torch.randint(0, len(WatermarkPolicyHead.POSITION_FRACTIONS), (1,)).squeeze().to(prompt_hidden.device)
         
-        chosen_type = self.config.get("force_strategy") or self.type_list[type_idx.item()]
+        if self.config.get("random_policy"):
+            type_idx      = torch.randint(0, len(self.type_list), (1,)).squeeze().to(prompt_hidden.device)
+            intensity_idx = torch.randint(0, 3, (1,)).squeeze().to(prompt_hidden.device)
+            position_idx  = torch.randint(0, 3, (1,)).squeeze().to(prompt_hidden.device)
+
+        chosen_type   = self.config.get("force_strategy") or self.type_list[type_idx.item()]
         intensity     = WatermarkPolicyHead.INTENSITY_VALUES[intensity_idx.item()]
         position_frac = WatermarkPolicyHead.POSITION_FRACTIONS[position_idx.item()]
-        ppl_scale     = self.get_ppl_intensity_scale()
+        ppl_scale     = 1.0 if self.config.get("random_policy") else self.get_ppl_intensity_scale()
         intensity     = intensity * ppl_scale
 
         # Recompute type_dist for log_prob (needed whether we sampled from it or forced uniform)

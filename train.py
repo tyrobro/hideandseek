@@ -70,7 +70,8 @@ class Trainer:
         print(f"Loaded {len(self.prompts)} prompts.")
 
         self.log_rows = []
-        self.b_baseline = None
+        self.b_base_type = None
+        self.b_base_span = None
         self.b_diag     = {}
         self.type_hist  = deque(maxlen=50)
         os.makedirs(config["checkpoint_dir"], exist_ok=True)
@@ -111,7 +112,9 @@ class Trainer:
 
             if not text.strip():
                 continue   # skip degenerate generations
-
+            
+            toks = self.agent_a.tokenizer.encode(text)
+            uniq = len(set(toks)) / max(1, len(toks))
             # 4. Compute fluency (perplexity) of generated text
             perplexity = compute_perplexity(
                 self.agent_a.model,
@@ -153,8 +156,13 @@ class Trainer:
             self.type_hist.append(float(info["type_correct"]))
 
                 # 7. PPO updates
-            self._update_agent_a(prompt, text, logprobs_a, r_a)
-            self._update_agent_b(pred_type, pred_span, text, logprobs_b, r_b)
+            info["intensity_idx"] = int(logprobs_a["action_indices"]["intensity"])
+            info["uniq_ratio"]    = uniq
+            self.type_hist.append(float(info["type_correct"]))
+            ...
+            if not self.config.get("freeze_agent_a"):
+                self._update_agent_a(prompt, text, logprobs_a, r_a)
+            self._update_agent_b(pred_type, pred_span, text, logprobs_b, info)
 
                 # 8. Logging
             if episode % self.config["log_every"] == 0:
@@ -213,20 +221,25 @@ class Trainer:
             self.scaler_a.update()
             torch.cuda.empty_cache()
 
-    def _update_agent_b(self, pred_type, pred_span, text, old_logprobs_b, reward: float):
-        if self.b_baseline is None:
-            self.b_baseline = reward
-        advantage       = reward - self.b_baseline
-        self.b_baseline = 0.98 * self.b_baseline + 0.02 * reward
-        adv_t = torch.tensor(advantage, dtype=torch.float32, device=self.device_b)
+    def _update_agent_b(self, pred_type, pred_span, text, old_logprobs_b, info):
+        r_type = float(info["type_correct"])      # unit rewards per head
+        r_span = float(info["iou"])
+        if self.b_base_type is None:
+            self.b_base_type, self.b_base_span = r_type, r_span
+        adv_type = r_type - self.b_base_type
+        adv_span = r_span - self.b_base_span
+        self.b_base_type = 0.98 * self.b_base_type + 0.02 * r_type
+        self.b_base_span = 0.98 * self.b_base_span + 0.02 * r_span
+        at = torch.tensor(adv_type, dtype=torch.float32, device=self.device_b)
+        as_ = torch.tensor(adv_span, dtype=torch.float32, device=self.device_b)
         head_params = (list(self.agent_b.type_head.parameters()) +
-                        list(self.agent_b.span_start_head.parameters()) +
-                        list(self.agent_b.span_end_head.parameters()))
-    
+                    list(self.agent_b.span_start_head.parameters()) +
+                    list(self.agent_b.span_end_head.parameters()))
+
         for _ in range(self.config["ppo_epochs"]):
             with torch.amp.autocast(device_type='cuda'):
                 new_lp = self.agent_b.evaluate(text, pred_type, pred_span)
-                loss   = self.agent_b.ppo_loss(old_logprobs_b, new_lp, adv_t,
+                loss   = self.agent_b.ppo_loss(old_logprobs_b, new_lp, at, as_,
                                             self.config.get("entropy_coef_b", 0.01))
             self.opt_b.zero_grad()
             self.scaler_b.scale(loss).backward()
@@ -235,11 +248,10 @@ class Trainer:
             self.scaler_b.step(self.opt_b)
             self.scaler_b.update()
             torch.cuda.empty_cache()
-    
-            self.b_diag = {"b_grad_norm": float(grad_norm),
-                        "b_type_entropy": float(new_lp["type_entropy"]),
-                        "b_advantage": advantage}
 
+        self.b_diag = {"b_grad_norm": float(grad_norm),
+                    "b_type_entropy": float(new_lp["type_entropy"]),
+                    "b_adv_type": adv_type, "b_adv_span": adv_span}
     # ── Logging & checkpointing ───────────────────────────────────────────
 
     def _log(self, episode: int, info: dict):
