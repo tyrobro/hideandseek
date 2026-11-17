@@ -34,8 +34,11 @@ class AgentB(nn.Module):
         self.tokenizer = DistilBertTokenizerFast.from_pretrained(
             config["detector_model"]
         )
+        # eager attention: the fused SDPA kernels are the usual suspect for illegal
+        # memory accesses when a model lives on a non-default GPU (cuda:1) and is
+        # run with grad enabled. Sequences are ~100 tokens, so the cost is negligible.
         self.encoder   = DistilBertModel.from_pretrained(
-            config["detector_model"]
+            config["detector_model"], attn_implementation="eager"
         ).to(device)
 
         hidden_size = self.encoder.config.hidden_size   # 768 for DistilBERT
@@ -102,7 +105,16 @@ class AgentB(nn.Module):
 
     # ── Forward pass ──────────────────────────────────────────────────────
 
+    def _device_ctx(self):
+        """Make B's GPU the *current* device while B runs (A is on cuda:0)."""
+        d = str(self.device)
+        return torch.cuda.device(d) if d.startswith("cuda") else contextlib.nullcontext()
+
     def forward(self, text: str) -> Dict:
+        with self._device_ctx():
+            return self._forward_impl(text)
+
+    def _forward_impl(self, text: str) -> Dict:
         """
         Encode text and run both heads.
 

@@ -268,6 +268,10 @@ class Trainer:
             torch.cuda.empty_cache()
 
     def _update_agent_b_batch(self):
+        with self.agent_b._device_ctx():     # B's GPU current during its update
+            self._update_agent_b_batch_impl()
+
+    def _update_agent_b_batch_impl(self):
         """One PPO update for B on a batch of episodes.
         Single-episode updates with a 0/1 reward are very noisy; with no signal they
         drift into a one-class collapse. Advantages are normalised across the batch."""
@@ -291,7 +295,7 @@ class Trainer:
                     new_lp = self.agent_b.evaluate(text, p_type, p_span)
                     losses.append(self.agent_b.ppo_loss(old_lp, new_lp, adv_type[k], adv_span[k],
                                                         entropy_coef))
-                    ents.append(float(new_lp["type_entropy"]))
+                    ents.append(float(new_lp["type_entropy"].detach()))
                 loss = torch.stack(losses).mean()
             self.opt_b.zero_grad()
             self.scaler_b.scale(loss).backward()
