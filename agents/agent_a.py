@@ -250,8 +250,20 @@ class AgentA(nn.Module):
                 use_cache         = True,   # KV-cache: huge memory saving
             )
 
-        new_ids = generated[:, input_ids.shape[1]:]
-        text    = self.tokenizer.decode(new_ids.squeeze(), skip_special_tokens=True)
+        new_ids  = generated[:, input_ids.shape[1]:]
+        new_list = new_ids.squeeze(0).tolist()
+        text     = self.tokenizer.decode(new_list, skip_special_tokens=True)
+
+        # Character span of the watermark window inside `text` (window = generation
+        # steps wm_start..wm_end inclusive). Lets B's wordpiece indices be compared
+        # with the true span via offset mapping instead of mismatched token indices.
+        n_new     = len(new_list)
+        s_tok     = min(wm_start, n_new)
+        e_tok     = min(wm_end + 1, n_new)
+        c0        = len(self.tokenizer.decode(new_list[:s_tok], skip_special_tokens=True))
+        c1        = len(self.tokenizer.decode(new_list[:e_tok], skip_special_tokens=True))
+        char_span = (min(c0, len(text)), min(c1, len(text)))
+        wm_in_text = wm_start < n_new   # False if generation ended before the window
 
         del generated, new_ids, input_ids
         torch.cuda.empty_cache()
@@ -261,6 +273,8 @@ class AgentA(nn.Module):
             "action_indices" : action_indices,
             "tokens"         : None,
             "position_frac" : position_frac,
+            "char_span"     : char_span,
+            "wm_in_text"    : wm_in_text,
         }
 
         return text, chosen_type, true_span, all_logprobs

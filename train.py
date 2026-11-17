@@ -58,12 +58,11 @@ class Trainer:
             {"params": self.agent_a.policy.parameters(), "lr": config["lr_agent_a"]},
             {"params": self.agent_a.model.parameters(),  "lr": config.get("lr_backbone_a", 1e-6)},
         ])
-        self.opt_b = torch.optim.Adam(
-            list(self.agent_b.type_head.parameters()) +
-            list(self.agent_b.span_start_head.parameters()) +
-            list(self.agent_b.span_end_head.parameters()),
-            lr=config["lr_agent_b"],
-        )
+        b_groups = [{"params": self.agent_b.head_parameters(), "lr": config["lr_agent_b"]}]
+        if self.agent_b.train_encoder:
+            b_groups.append({"params": self.agent_b.encoder_parameters(),
+                             "lr": config.get("lr_encoder_b", 2e-5)})
+        self.opt_b = torch.optim.Adam(b_groups)
         # Mixed precision — cuts VRAM ~40-50% with negligible quality loss
         self.scaler_a = torch.amp.GradScaler(device='cuda')
         self.scaler_b = torch.amp.GradScaler(device='cuda')
@@ -78,9 +77,9 @@ class Trainer:
         print(f"Loaded {len(self.prompts)} prompts.")
 
         self.log_rows    = []
-        self.b_base_type = None
-        self.b_base_span = None
         self.b_diag      = {}
+        self._b_buffer   = []        # B rollouts waiting for a batched update
+        self.n_no_wm     = 0         # episodes skipped: generation ended before the window
         self.type_hist   = deque(maxlen=50)
 
         # ── Resume from checkpoint if one exists ──────────────────────────
@@ -93,6 +92,8 @@ class Trainer:
             self.agent_b.type_head.load_state_dict(ckpt["agent_b_heads"]["type"])
             self.agent_b.span_start_head.load_state_dict(ckpt["agent_b_heads"]["start"])
             self.agent_b.span_end_head.load_state_dict(ckpt["agent_b_heads"]["end"])
+            if "agent_b_encoder" in ckpt and self.agent_b.train_encoder:
+                self.agent_b.encoder.load_state_dict(ckpt["agent_b_encoder"])
             for name, opt in (("opt_a", self.opt_a), ("opt_b", self.opt_b)):
                 if name in ckpt:
                     try:
@@ -117,7 +118,7 @@ class Trainer:
         print("Config in effect:", {k: self.config.get(k) for k in [
             "force_strategy", "random_policy", "freeze_agent_a", "ppl_brake",
             "min_unique_ratio", "lr_agent_a", "lr_backbone_a", "lr_agent_b",
-            "entropy_coef_b", "log_every", "save_every"]})
+            "entropy_coef_b", "b_update_batch", "unfreeze_encoder_b", "lr_encoder_b", "b_pooling", "log_every", "save_every"]})
 
         for episode in tqdm(range(self.start_episode, self.config["num_episodes"] + 1)):
             torch.cuda.empty_cache()
@@ -134,6 +135,9 @@ class Trainer:
 
             if not text.strip():
                 continue   # skip degenerate generations
+            if not logprobs_a.get("wm_in_text", True):
+                self.n_no_wm += 1   # generation ended before the watermark window:
+                continue            # no watermark in the text, label would be noise
 
             toks = self.agent_a.tokenizer.encode(text)
             uniq = len(set(toks)) / max(1, len(toks))
@@ -169,6 +173,10 @@ class Trainer:
             # 5. Agent B detects watermark
             pred_type, pred_span, logprobs_b = self.agent_b.detect(text)
 
+            # Ground-truth span in B's own (wordpiece) index space
+            true_span_gpt2 = true_span
+            true_span      = self.agent_b.char_span_to_token_span(text, logprobs_a["char_span"])
+
             # 6. Environment step → rewards
             r_a, r_b, info = self.env.step(
                 watermarked_text = text,
@@ -182,13 +190,17 @@ class Trainer:
             )
 
             self.type_hist.append(float(info["type_correct"]))
-            info["intensity_idx"] = int(logprobs_a["action_indices"]["intensity"])
+            info["intensity_idx"]   = int(logprobs_a["action_indices"]["intensity"])
+            info["true_span_gpt2"]  = true_span_gpt2
             info["uniq_ratio"]    = uniq
 
             # 7. PPO updates
             if not self.frozen_a:
                 self._update_agent_a(prompt, text, logprobs_a, r_a)
-            self._update_agent_b(pred_type, pred_span, text, logprobs_b, info)
+            self._b_buffer.append((text, pred_type, pred_span, logprobs_b,
+                                   float(info["type_correct"]), float(info["iou"])))
+            if len(self._b_buffer) >= self.config.get("b_update_batch", 8):
+                self._update_agent_b_batch()
 
             # 8. Logging
             if episode % self.config["log_every"] == 0:
@@ -198,7 +210,7 @@ class Trainer:
             if episode % self.config["save_every"] == 0:
                 self._save(episode)
 
-        print("\nTraining complete.")
+        print(f"\nTraining complete. Episodes skipped (no watermark in text): {self.n_no_wm}")
         self._save_logs()
 
     # ── PPO update helpers ────────────────────────────────────────────────
@@ -255,26 +267,32 @@ class Trainer:
             self.scaler_a.update()
             torch.cuda.empty_cache()
 
-    def _update_agent_b(self, pred_type, pred_span, text, old_logprobs_b, info):
-        r_type = float(info["type_correct"])      # unit rewards per head
-        r_span = float(info["iou"])
-        if self.b_base_type is None:
-            self.b_base_type, self.b_base_span = r_type, r_span
-        adv_type = r_type - self.b_base_type
-        adv_span = r_span - self.b_base_span
-        self.b_base_type = 0.98 * self.b_base_type + 0.02 * r_type
-        self.b_base_span = 0.98 * self.b_base_span + 0.02 * r_span
-        at  = torch.tensor(adv_type, dtype=torch.float32, device=self.device_b)
-        as_ = torch.tensor(adv_span, dtype=torch.float32, device=self.device_b)
-        head_params = (list(self.agent_b.type_head.parameters()) +
-                       list(self.agent_b.span_start_head.parameters()) +
-                       list(self.agent_b.span_end_head.parameters()))
+    def _update_agent_b_batch(self):
+        """One PPO update for B on a batch of episodes.
+        Single-episode updates with a 0/1 reward are very noisy; with no signal they
+        drift into a one-class collapse. Advantages are normalised across the batch."""
+        buf, self._b_buffer = self._b_buffer, []
+        dev = self.device_b
+
+        def norm(r):
+            r = torch.tensor(r, dtype=torch.float32, device=dev)
+            # std floored so near-constant rewards (e.g. IoU all ~0) don't get amplified
+            return (r - r.mean()) / r.std(unbiased=False).clamp(min=0.1)
+
+        adv_type = norm([b[4] for b in buf])
+        adv_span = norm([b[5] for b in buf])
+        entropy_coef = self.config.get("entropy_coef_b", 0.01)
+        head_params = self.agent_b.trainable_parameters()   # heads (+ encoder if unfrozen)
 
         for _ in range(self.config["ppo_epochs"]):
             with torch.amp.autocast(device_type='cuda'):
-                new_lp = self.agent_b.evaluate(text, pred_type, pred_span)
-                loss   = self.agent_b.ppo_loss(old_logprobs_b, new_lp, at, as_,
-                                               self.config.get("entropy_coef_b", 0.01))
+                losses, ents = [], []
+                for k, (text, p_type, p_span, old_lp, _, _) in enumerate(buf):
+                    new_lp = self.agent_b.evaluate(text, p_type, p_span)
+                    losses.append(self.agent_b.ppo_loss(old_lp, new_lp, adv_type[k], adv_span[k],
+                                                        entropy_coef))
+                    ents.append(float(new_lp["type_entropy"]))
+                loss = torch.stack(losses).mean()
             self.opt_b.zero_grad()
             self.scaler_b.scale(loss).backward()
             self.scaler_b.unscale_(self.opt_b)
@@ -284,8 +302,9 @@ class Trainer:
             torch.cuda.empty_cache()
 
         self.b_diag = {"b_grad_norm": float(grad_norm),
-                       "b_type_entropy": float(new_lp["type_entropy"]),
-                       "b_adv_type": adv_type, "b_adv_span": adv_span}
+                       "b_type_entropy": sum(ents) / len(ents),
+                       "b_adv_type": float(adv_type.abs().mean()),
+                       "b_adv_span": float(adv_span.abs().mean())}
 
     # ── Logging & checkpointing ───────────────────────────────────────────
 
@@ -328,6 +347,8 @@ class Trainer:
             "position_history": self.env.position_history,
             "log_rows"       : self.log_rows,
         }
+        if self.agent_b.train_encoder:
+            payload["agent_b_encoder"] = self.agent_b.encoder.state_dict()
         # Backbone only when it is being trained (frozen = unchanged pretrained GPT-2)
         if not self.frozen_a:
             payload["agent_a_model"] = self.agent_a.model.state_dict()

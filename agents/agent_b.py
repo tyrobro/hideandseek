@@ -4,6 +4,7 @@
 #   1. Classification head  → watermark type (4-class)
 #   2. Span prediction head → (start, end) token indices (like SQuAD QA)
 
+import contextlib
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -39,9 +40,19 @@ class AgentB(nn.Module):
 
         hidden_size = self.encoder.config.hidden_size   # 768 for DistilBERT
 
+        # ── Run 15 (Path 4): stronger detector ────────────────────────────
+        #   unfreeze_encoder_b : fine-tune DistilBERT instead of using frozen features
+        #   b_pooling          : "mean" (old) or "cls_mean_max" — max-pooling over tokens
+        #                        keeps a rare, strongly-biased token from being averaged away
+        self.train_encoder = bool(config.get("unfreeze_encoder_b", False))
+        self.pooling       = config.get("b_pooling", "mean")
+        for p in self.encoder.parameters():
+            p.requires_grad_(self.train_encoder)
+        pooled_dim = hidden_size * (3 if self.pooling == "cls_mean_max" else 1)
+
         # ── Head 1: Watermark type classification ─────────────────────────
         self.type_head = nn.Sequential(
-            nn.Linear(hidden_size, 128),
+            nn.Linear(pooled_dim, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, config["num_watermark_types"]),
@@ -51,6 +62,43 @@ class AgentB(nn.Module):
         # Identical to SQuAD-style QA heads
         self.span_start_head = nn.Linear(hidden_size, 1).to(device)
         self.span_end_head   = nn.Linear(hidden_size, 1).to(device)
+
+        # The encoder is frozen and the type head has Dropout. In train mode the
+        # rollout (detect) and the update (evaluate) see different dropout masks, so
+        # the PPO ratio is noisy even at the first epoch. Keep B deterministic.
+        self.eval()
+
+    def head_parameters(self):
+        return (list(self.type_head.parameters()) +
+                list(self.span_start_head.parameters()) +
+                list(self.span_end_head.parameters()))
+
+    def encoder_parameters(self):
+        return list(self.encoder.parameters()) if self.train_encoder else []
+
+    def trainable_parameters(self):
+        return self.head_parameters() + self.encoder_parameters()
+
+    def _pool(self, hidden: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """hidden (1, L, H) -> pooled (1, H) or (1, 3H)."""
+        if self.pooling != "cls_mean_max" or hidden.shape[1] <= 2:
+            m = attention_mask.unsqueeze(-1).float()
+            mean = (hidden * m).sum(dim=1) / m.sum(dim=1)
+            return mean if self.pooling != "cls_mean_max" else torch.cat([hidden[:, 0], mean, mean], dim=-1)
+        content = hidden[:, 1:-1]                     # drop [CLS] and [SEP]
+        return torch.cat([hidden[:, 0], content.mean(dim=1), content.max(dim=1).values], dim=-1)
+
+    def char_span_to_token_span(self, text: str, char_span: Tuple[int, int]) -> Tuple[int, int]:
+        """Map a character span in `text` to B's wordpiece indices (end exclusive).
+        Special tokens have zero-width offsets and are never part of the span."""
+        enc  = self.tokenizer(text, truncation=True, max_length=512,
+                              return_offsets_mapping=True)
+        cs, ce = char_span
+        idx = [i for i, (a, b) in enumerate(enc["offset_mapping"])
+               if b > a and a < ce and b > cs]
+        if not idx:
+            return (0, 0)
+        return (idx[0], idx[-1] + 1)
 
     # ── Forward pass ──────────────────────────────────────────────────────
 
@@ -72,13 +120,13 @@ class AgentB(nn.Module):
             padding=True,
         ).to(self.device)
         
-        with torch.no_grad():
+        ctx = contextlib.nullcontext() if self.train_encoder else torch.no_grad()
+        with ctx:
             hidden = self.encoder(**encoding).last_hidden_state  # (1, seq_len, 768)
 
-        # Classification: pool [CLS] token
-        attention_mask = encoding["attention_mask"].unsqueeze(-1).float()
-        mean_hidden    = (hidden * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
-        type_logits    = self.type_head(mean_hidden)
+        # Classification: pooled sequence features
+        pooled      = self._pool(hidden, encoding["attention_mask"])
+        type_logits = self.type_head(pooled)
         # Span: per-token start/end logits
         start_logits = self.span_start_head(hidden).squeeze(-1)  # (1, seq_len)
         end_logits   = self.span_end_head(hidden).squeeze(-1)    # (1, seq_len)
