@@ -41,4 +41,6 @@ CONFIG = {
     "freeze_agent_a": False,
     "lr_backbone_a": 1e-6, 
     "min_unique_ratio": 0.0,
+    "b_mode": "model",            # "random" = random guesser instead of Agent B (A-side experiments)
+    "legacy_history_bug": False,  # True reproduces the Run 08-10 strategy_history pollution
 }

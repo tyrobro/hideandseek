@@ -4,6 +4,7 @@
 
 import os
 import glob
+import random
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -118,7 +119,7 @@ class Trainer:
         print("Config in effect:", {k: self.config.get(k) for k in [
             "force_strategy", "random_policy", "freeze_agent_a", "ppl_brake",
             "min_unique_ratio", "lr_agent_a", "lr_backbone_a", "lr_agent_b",
-            "entropy_coef_b", "b_update_batch", "unfreeze_encoder_b", "lr_encoder_b", "b_pooling", "log_every", "save_every"]})
+            "entropy_coef_b", "b_update_batch", "b_mode", "legacy_history_bug", "unfreeze_encoder_b", "lr_encoder_b", "b_pooling", "log_every", "save_every"]})
 
         for episode in tqdm(range(self.start_episode, self.config["num_episodes"] + 1)):
             torch.cuda.empty_cache()
@@ -171,7 +172,15 @@ class Trainer:
                 continue
 
             # 5. Agent B detects watermark
-            pred_type, pred_span, logprobs_b = self.agent_b.detect(text)
+            if self.config.get("b_mode") == "random":
+                # B replaced by a random guesser (the situation in Runs 01-11), for A-side experiments
+                n_wp = len(self.agent_b.tokenizer(text, truncation=True, max_length=512)["input_ids"])
+                pred_type = random.choice(self.config["watermark_types"])
+                s0 = random.randint(1, max(1, n_wp - 2))
+                pred_span = (s0, random.randint(s0, max(s0, n_wp - 2)))
+                logprobs_b = None
+            else:
+                pred_type, pred_span, logprobs_b = self.agent_b.detect(text)
 
             # Ground-truth span in B's own (wordpiece) index space
             true_span_gpt2 = true_span
@@ -197,10 +206,11 @@ class Trainer:
             # 7. PPO updates
             if not self.frozen_a:
                 self._update_agent_a(prompt, text, logprobs_a, r_a)
-            self._b_buffer.append((text, pred_type, pred_span, logprobs_b,
-                                   float(info["type_correct"]), float(info["iou"])))
-            if len(self._b_buffer) >= self.config.get("b_update_batch", 8):
-                self._update_agent_b_batch()
+            if self.config.get("b_mode") != "random":
+                self._b_buffer.append((text, pred_type, pred_span, logprobs_b,
+                                       float(info["type_correct"]), float(info["iou"])))
+                if len(self._b_buffer) >= self.config.get("b_update_batch", 8):
+                    self._update_agent_b_batch()
 
             # 8. Logging
             if episode % self.config["log_every"] == 0:

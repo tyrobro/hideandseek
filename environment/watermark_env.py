@@ -75,6 +75,10 @@ class WatermarkEnv:
 
         # Log strategy for future novelty computation
         self.strategy_history.append(chosen_type)
+        if self.config.get("legacy_history_bug"):
+            # Reproduces the Run 08-10 bug for experiment Q4: spans interleaved with strategies,
+            # so the last 20 entries hold at most 10 strategies (floor never fires, novelty halved)
+            self.strategy_history.append(true_span)
         
         info = {
             "episode"      : self.episode_count,
