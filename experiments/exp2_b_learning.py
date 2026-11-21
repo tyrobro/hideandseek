@@ -14,16 +14,31 @@ ap.add_argument("--data_dir", default="data")
 ap.add_argument("--episodes", type=int, default=10000)
 ap.add_argument("--seeds", type=int, default=3)
 ap.add_argument("--out", default="data/exp2_results.csv")
+ap.add_argument("--no_standardise", action="store_true",
+                help="feed raw cached features (as the real B did) instead of z-scored ones")
+ap.add_argument("--pool", choices=["all", "mean"], default="all",
+                help="all = CLS+mean+max (2304-d); mean = mean-pool only (768-d, as in Runs 11-14)")
+ap.add_argument("--quick", action="store_true", help="reduced grid (lr 1e-4/3e-4 only)")
 args = ap.parse_args()
 
 def load(name, four_class):
     z = np.load(os.path.join(args.data_dir, name))
     X, y, tr, va = z["X"], z["y"], z["tr"], z["va"]
+    if args.pool == "mean":
+        D = X.shape[1] // 3
+        X = X[:, D:2 * D]
+    rng = np.random.default_rng(0)
+    a, b = rng.integers(0, len(X), 2000), rng.integers(0, len(X), 2000)
+    cos = (X[a] * X[b]).sum(1) / (np.linalg.norm(X[a], axis=1) * np.linalg.norm(X[b], axis=1) + 1e-9)
+    print(f"{name}: raw feature dim {X.shape[1]}, mean pairwise cosine similarity between random texts = {cos.mean():.3f}")
     if four_class:                       # drop the 'none' class (label 4)
         keep = y < 4
         tr, va = tr[keep[tr]], va[keep[va]]
-    mu, sd = X[tr].mean(0), X[tr].std(0) + 1e-6
-    X = torch.tensor((X - mu) / sd, dtype=torch.float32)
+    if args.no_standardise:
+        X = torch.tensor(X, dtype=torch.float32)
+    else:
+        mu, sd = X[tr].mean(0), X[tr].std(0) + 1e-6
+        X = torch.tensor((X - mu) / sd, dtype=torch.float32)
     return X[tr], torch.tensor(y[tr]), X[va], torch.tensor(y[va])
 
 def head(D):
@@ -85,9 +100,10 @@ shuf = (real[0], real[1][torch.randperm(len(real[1]), generator=torch.Generator(
         real[3][torch.randperm(len(real[3]), generator=torch.Generator().manual_seed(2))])
 sets = {"real": real, "planted": planted, "shuffled": shuf}
 
-grid = [("sup", lr, 0.0) for lr in (1e-5, 1e-4, 3e-4)]
-grid += [("rl_batch", lr, e) for lr in (1e-5, 1e-4, 3e-4) for e in (0.01, 0.05)]
-grid += [("rl_single", lr, 0.01) for lr in (1e-5, 1e-4, 3e-4)]
+lrs = (1e-4, 3e-4) if args.quick else (1e-5, 1e-4, 3e-4)
+grid = [("sup", lr, 0.0) for lr in lrs]
+grid += [("rl_batch", lr, e) for lr in lrs for e in ((0.01,) if args.quick else (0.01, 0.05))]
+grid += [("rl_single", lr, 0.01) for lr in lrs]
 
 rows = []
 for (sname, data), (kind, lr, ent) in itertools.product(sets.items(), grid):
