@@ -3,6 +3,7 @@
 # GPT-2 backbone + a lightweight policy head that selects
 # (watermark_type, intensity, position) before each generation.
 
+import contextlib
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -70,6 +71,8 @@ class WatermarkLogitsProcessor(LogitsProcessor):
                 self.step,
                 self.max_new,
                 self.intensity,
+                rel_pos    = self.step - self.wm_start,
+                window_len = self.wm_end - self.wm_start + 1,
             )
         self.step += 1
         return scores
@@ -117,6 +120,24 @@ class AgentA(nn.Module):
         self.syntactic_bias_tokens = list(range(100, 200))          # placeholder
         self.semantic_synonym_map  = {i: i + 10 for i in range(1000, 4000)}   # placeholder
         self.recent_ppls = [] 
+
+        # ── Run 16: watermarks v2 (fixed disjoint token sets, see environment/watermark_v2.py)
+        self.wm_engine = None
+        if config.get("wm_version", "v1") == "v2":
+            from environment.watermark_v2 import WatermarkEngine
+            V = self.model.config.vocab_size
+            vocab = self.tokenizer.convert_ids_to_tokens(list(range(V)))
+            self.wm_engine = WatermarkEngine(
+                vocab, V, key=config.get("wm_key", 20260101),
+                strength=config.get("wm_strength", 1.0), deltas=config.get("wm_deltas"))
+            print("Watermarks v2 set sizes:", self.wm_engine.set_sizes(),
+                  "| strength", self.wm_engine.strength)
+
+        # ── Run 16: frozen backbone (policy head is the only thing A learns) ──
+        self.backbone_frozen = bool(config.get("freeze_backbone_a"))
+        if self.backbone_frozen:
+            for p in self.model.parameters():
+                p.requires_grad_(False)
     # ── Strategy selection ────────────────────────────────────────────────
 
     def select_strategy(self, prompt_hidden: torch.Tensor, strategy_history: list = None) -> Tuple:
@@ -290,9 +311,12 @@ class AgentA(nn.Module):
             return_attention_mask = True,
         ).to(self.device)
 
-        # This forward pass NEEDS grad — it's what PPO differentiates
-        outputs       = self.model(**inputs, output_hidden_states=True)
-        prompt_hidden = outputs.hidden_states[-1]
+        # This forward pass needs grad only when the backbone is being trained; with a frozen
+        # backbone only the policy head is differentiated.
+        ctx = torch.no_grad() if self.backbone_frozen else contextlib.nullcontext()
+        with ctx:
+            outputs       = self.model(**inputs, output_hidden_states=True)
+            prompt_hidden = outputs.hidden_states[-1]
 
         head_out = self.policy(prompt_hidden)
 
@@ -316,8 +340,12 @@ class AgentA(nn.Module):
         position    : int,
         total_len   : int,
         intensity   : float,
+        rel_pos     : int = 0,
+        window_len  : int = 17,
     ) -> Tuple[torch.Tensor, Dict]:
         """Route to the correct watermarking function."""
+        if self.wm_engine is not None:
+            return self.wm_engine.apply(chosen_type, logits, rel_pos, window_len, intensity)
 
         if chosen_type == "token":
             return WATERMARK_STRATEGIES["token"](

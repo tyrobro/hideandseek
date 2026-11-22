@@ -20,7 +20,13 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--device", default="cuda:0")
 ap.add_argument("--top_k", type=int, default=None,
                 help="None = whatever the model's generation_config does (the training default); 0 disables top-k")
+ap.add_argument("--strength", type=float, default=None, help="wm_strength override (v2 watermarks)")
+ap.add_argument("--wm_version", default=None, help="v1 (old) or v2; default = config.py")
 args = ap.parse_args()
+if args.strength is not None:
+    CONFIG["wm_strength"] = args.strength
+if args.wm_version is not None:
+    CONFIG["wm_version"] = args.wm_version
 
 os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 done = 0

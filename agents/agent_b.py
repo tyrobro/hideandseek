@@ -13,6 +13,36 @@ from typing import Tuple, Dict
 from config import CONFIG
 
 
+class RunningStandardiser(nn.Module):
+    """Per-feature standardisation with running statistics.
+    Q2 (EXPERIMENT_RESULTS.md): raw pooled features of different texts are nearly identical
+    (cosine ~0.74-0.89); RL on them collapses to one class. Statistics are tracked during B's
+    warm-up and then frozen, so rollouts and PPO updates see identical normalisation."""
+
+    def __init__(self, dim: int, enabled: bool = True, eps: float = 1e-5):
+        super().__init__()
+        self.enabled, self.eps, self.track = enabled, eps, False
+        self.register_buffer("mean", torch.zeros(dim))
+        self.register_buffer("var", torch.ones(dim))
+        self.register_buffer("count", torch.zeros(()))
+
+    @torch.no_grad()
+    def _update(self, x: torch.Tensor):
+        x = x.detach().float().reshape(-1, x.shape[-1])
+        n = float(self.count) + 1.0
+        m = max(1.0 / n, 0.01)                     # running mean/var, EMA floor 0.01
+        self.mean.mul_(1 - m).add_(x.mean(0) * m)
+        self.var.mul_(1 - m).add_(((x - self.mean) ** 2).mean(0) * m)
+        self.count.fill_(n)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.enabled:
+            return x
+        if self.track:
+            self._update(x)
+        return (x - self.mean.to(x.dtype)) / torch.sqrt(self.var.to(x.dtype) + self.eps)
+
+
 class AgentB(nn.Module):
     """
     The Detector agent.
@@ -52,6 +82,8 @@ class AgentB(nn.Module):
         for p in self.encoder.parameters():
             p.requires_grad_(self.train_encoder)
         pooled_dim = hidden_size * (3 if self.pooling == "cls_mean_max" else 1)
+
+        self.norm = RunningStandardiser(pooled_dim, enabled=bool(config.get("b_standardise", False))).to(device)
 
         # ── Head 1: Watermark type classification ─────────────────────────
         self.type_head = nn.Sequential(
@@ -137,7 +169,7 @@ class AgentB(nn.Module):
             hidden = self.encoder(**encoding).last_hidden_state  # (1, seq_len, 768)
 
         # Classification: pooled sequence features
-        pooled      = self._pool(hidden, encoding["attention_mask"])
+        pooled      = self.norm(self._pool(hidden, encoding["attention_mask"]))
         type_logits = self.type_head(pooled)
         # Span: per-token start/end logits
         start_logits = self.span_start_head(hidden).squeeze(-1)  # (1, seq_len)
@@ -206,7 +238,34 @@ class AgentB(nn.Module):
         end_lp   = F.log_softmax(end_logits, dim=-1)[0, end]
         probs    = F.softmax(out["type_logits"], dim=-1)
         entropy  = -(probs * torch.log(probs + 1e-9)).sum()
-        return {"type": type_lp, "start": start_lp, "end": end_lp, "type_entropy": entropy}
+        return {"type": type_lp, "start": start_lp, "end": end_lp, "type_entropy": entropy,
+                "type_logits": out["type_logits"], "start_logits": out["start_logits"],
+                "end_logits": out["end_logits"]}
+
+    def supervised_loss(self, ev: Dict, true_type: str, true_span: Tuple[int, int]) -> torch.Tensor:
+        """Cross-entropy of the heads against the known label (used with the PPO term; see Q2).
+        true_span is in B's wordpiece space with an EXCLUSIVE end (char_span_to_token_span)."""
+        dev = ev["type_logits"].device
+        L = ev["start_logits"].shape[-1]
+        s = min(max(int(true_span[0]), 0), L - 1)
+        e = min(max(int(true_span[1]) - 1, s), L - 1)          # inclusive end index
+        t = torch.tensor([self.type_list.index(true_type)], device=dev)
+        ce_t = F.cross_entropy(ev["type_logits"], t)
+        ce_s = F.cross_entropy(ev["start_logits"], torch.tensor([s], device=dev))
+        ce_e = F.cross_entropy(ev["end_logits"], torch.tensor([e], device=dev))
+        return ce_t + 0.5 * (ce_s + ce_e)
+
+    @torch.no_grad()
+    def detect_greedy(self, text: str):
+        """Deterministic prediction for evaluation. Span end is EXCLUSIVE (same convention as the
+        true span and compute_iou)."""
+        out = self.forward(text)
+        pred_type = self.type_list[int(out["type_logits"].argmax(-1))]
+        s = int(out["start_logits"].argmax(-1))
+        el = out["end_logits"].clone()
+        el[:, :s] = -1e9
+        e = int(el.argmax(-1))
+        return pred_type, (s, e + 1), out["type_logits"].softmax(-1)[0].tolist()
     # ── PPO update ────────────────────────────────────────────────────────
 
     def ppo_loss(self, old_logprobs: Dict, new_logprobs: Dict,
