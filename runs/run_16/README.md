@@ -61,4 +61,66 @@ See `experiments/README_EXPERIMENTS.md` and the Run 16 notebook cells: pull; run
 
 ## Results
 
-*(to be filled in after the run: gate table, warm-up accuracy, final evaluation JSON, A-side windows, samples, and a verdict against criteria 1–9, with caveats.)*
+Single seed. Held-out evaluation: 400 fresh episodes, A playing uniformly at random (all intensities, all strategies equally), B greedy. The training log has one row per 25 episodes (60 warm-up rows, 179 game rows), so per-window numbers from it are noisy.
+
+### Held-out evaluation (`final_eval.json`)
+
+| Metric | Value | Reference |
+|---|---|---|
+| Type accuracy | **0.560** | chance 0.25; shuffled-prediction chance 0.242 |
+| Recall: token / semantic / positional | 0.889 / 0.611 / 0.813 | |
+| Recall: **syntactic** | **0.000** | 110 syntactic samples: 84 predicted positional, 25 token, 1 semantic |
+| Accuracy at intensity 0.3 / 0.6 / 1.0 | 0.399 / 0.617 / 0.674 | |
+| IoU (model) | **0.599** | full-text span 0.217; best fixed window 0.316 |
+
+Confusion matrix (rows = true, columns = predicted: token, syntactic, semantic, positional):
+
+| | token | syntactic | semantic | positional |
+|---|---|---|---|---|
+| token | 88 | 0 | 1 | 10 |
+| syntactic | 25 | 0 | 1 | 84 |
+| semantic | 22 | 0 | 58 | 15 |
+| positional | 16 | 0 | 2 | 78 |
+
+### Agent A during the game phase (179 logged rows)
+
+- Median PPL 22–29 per window (maximum 80); unique-token ratio median about 0.72; mean `max_share20` about 0.44.
+- Strategy shares over the game: positional 38%, semantic 33%, token 29%, **syntactic 0%** (zero of 179 rows, including the first 20 rows after the warm-up ended).
+- Intensity: about two thirds of recent choices are the lowest intensity (0.3).
+- Samples (`samples.txt`) are mostly coherent. Two show repetition: episode 1500 ("Great Great Great…", during the uniform warm-up) and episode 3500 (unique ratio 0.55).
+
+### Verdict against the pre-registered criteria
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Gate accuracy ≥ 0.50 | pass (0.687) |
+| 2 | Gate PPL ratio ≤ 2.5 | pass (≤ 1.41) |
+| 3 | Warm-up accuracy ≥ 0.40 | pass (the run did not abort; exact value in `data/run16.log`) |
+| 4 | Type accuracy ≥ 0.45 and ≥ 0.15 above shuffled chance | pass (0.560; +0.318) |
+| 5 | Recall ≥ 0.25 for every class | **fail** (syntactic 0.000) |
+| 6 | IoU exceeds best fixed window by ≥ 0.05 | pass (+0.283) |
+| 7 | Accuracy at intensity 1.0 above 0.3 | pass (0.674 vs 0.399) |
+| 8 | All four strategies ≥ 5%; mean `max_share20` < 0.6 | **partly fail** (max_share20 passes; syntactic is 0%) |
+| 9 | PPL < 2× plain text; unique ratio > 0.5; samples coherent | pass, with two weak samples |
+
+### What this shows
+
+- B now detects three of the four watermark types well above chance and localises the window well above the best fixed-window guess (0.60 vs 0.32). Runs 12–15 never produced a detector above chance. The sampled-prediction accuracy during the game (about 0.5) agrees with the greedy held-out figure.
+- The stealth trade-off works as designed: B is more accurate at higher intensity, and A moved toward low intensity.
+- A frozen backbone kept fluency and diversity stable throughout, as predicted by the C1 experiment.
+
+### What it does not show, and the open problem
+
+Syntactic is neither detected nor played. The two failures probably share one cause, but the cause is not established.
+
+- **Signal exists.** At the same strength the gate's bag-of-words classifier recognised syntactic 69% of the time, so the watermark is detectable in principle.
+- **A never played it.** Zero syntactic episodes in 179 logged game rows, starting from the first window. If A had been choosing uniformly, the chance of none in the first 20 logged rows would be about 0.3%, which points at A's initial type-head distribution (the head is untrained during the warm-up, has no entropy bonus, and the exploration floor only fires above 70% share) and not at a learned preference. Not verified.
+- **B then never saw it again.** For 4500 episodes B's training stream contained no syntactic examples, so its syntactic logit was only ever pushed down. Whether B had learned syntactic at the end of the warm-up and then forgot it, or never learned it, cannot be separated: no checkpoint from the end of the warm-up was kept.
+
+Other caveats: one seed; 400 evaluation episodes (about ±0.05 on overall accuracy); B is not purely RL (supervised warm-up and supervised term); the intensity-0.3 accuracy of 0.40 still beats chance, so low intensity is not yet fully stealthy.
+
+### Candidate fixes if another run is made (not applied)
+
+1. Initialise A's type head to uniform and add an entropy bonus on it, so no strategy starts at about 0%.
+2. Keep about 25% of game episodes as uniform-random "probe" episodes used for B's supervised loss only, so B cannot forget a class A stops playing.
+3. Save a checkpoint at the end of the warm-up and report per-class recall at that point.

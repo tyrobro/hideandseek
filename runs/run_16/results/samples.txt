@@ -1,0 +1,51 @@
+### ep 500 | positional | intensity_idx 2 | PPL 29.5 | uniq 0.71
+. 1210. The British army deployed two divisions in the morning, the first division to carry out reconnaissance in the mountains and the second to make a field search for a possible settlement of small settlements. The mountaineers laid out position points similar to those depicted south-west of this city, and soon found the land suitable for the landing. Within two hours a reconnaissance party, consisting of some six
+
+### ep 1000 | positional | intensity_idx 1 | PPL 29.9 | uniq 0.65
+ made a huge mistake. He tried to use a different machine than the Ferranti Mark 1 machine merely applying over water, but he failed. He tried to make a line using the machine without using any other method (he also tried to run a line using the machine that worked, which produced a more difficult line without any problems); but the line was too long. He then started using an
+
+### ep 1500 | positional | intensity_idx 2 | PPL 26.7 | uniq 0.71
+ats (UHMS) is home to over 30 faculty, an estimated 300 research facilities and a population of more than 1.8 million students. The University of Texas manages one of the world's largest livestock reserves , including more than 160,000 metric tons of beef and more than 4,000 hapless livestock through the season — hence the symbol — Beef Beef Great Great Great Great Great Great Great
+
+### ep 2000 | token | intensity_idx 1 | PPL 37.6 | uniq 0.80
+ - a German offensive on the Black Mountain which took several months and took them directly off the North-East flank of Romania.
+So why aren't we seeing any mention of the "German-Russians"? I'm hoping this isn't related to any particular Russian initiative and instead because this is an early and important event for Romania and NATO. We need to avoid "overwhelming results" from
+
+### ep 2500 | token | intensity_idx 0 | PPL 36.2 | uniq 0.79
+ free to many of their consumers . That same day, he received a patent for his free-of-charge computer that he called Zune 2 .
+
+Matsume is known as several popular characters from manga including Daisuki Kanazawa, Kagisuke Hoshino and Hoshijou Tsukasa . He was known for his well-developed animation and his many other inventions like
+
+### ep 3000 | positional | intensity_idx 0 | PPL 16.6 | uniq 0.71
+.
+
+However, there were exceptions. This year, a local case was resolved with a simple settlement of two petitions . This case involved a friend who reported seeing a woman crying in the middle of the sidewalk in front of her apartment. Police said when she attempted to drive away the man pulled her car and she was attacked and killed .
+
+These cases resulted in a three-year prison sentence
+
+### ep 3500 | positional | intensity_idx 1 | PPL 20.4 | uniq 0.55
+ating system for the word is a "syntonic" version of the British spelling of the word without naming its translation series, sometimes called "Bath " or "Bath-a-Long ". "L" is used loosely in the Oxford English spelling. "L" is pronounced "L-lo" or "Lo-lo"; "P" is pronounced "P-l-lo
+
+### ep 4000 | token | intensity_idx 0 | PPL 47.6 | uniq 0.81
+niting water that may be of more economic value than actually pouring the pot and what scientists consider to be hydrous wastes themselves :
+
+The study showed that drinking more water may also reduce carbon dioxide emissions associated with transportation and energy efficiency systems.
+
+The scientists used water from a well in which the air pollution can escape , but not when water levels are too high. The main effect on gas
+
+### ep 4500 | positional | intensity_idx 0 | PPL 25.1 | uniq 0.71
+ The regiment had been engaged in military service in China but was never able to take part, having been eliminated in September of 1940 in a forced surrender at Pankisi, a Chinese airfield. The French had been holding down the major battle of Ypres , but the Germans had taken advantage of the victory. In March 1941 the regiment moved to France to provide a base for the new German division ,
+
+### ep 5000 | positional | intensity_idx 0 | PPL 23.0 | uniq 0.76
+ in the matter has been suggested to be the responsibility of the American. The FBI has been said to have been instrumental in a number of attempts to assassinate President Kennedy but never succeeded . It remains unclear whether these charges will be tested during the general trial .
+
+Although a few members of the JFK assassination witness testimonials , eyewitness testimony and various forms of conspiracy theory have been published, no case from
+
+### ep 5500 | semantic | intensity_idx 1 | PPL 30.9 | uniq 0.68
+ict in the Dict class, including free types like List . List properties define the non-negative element type itself as non-negative and are the result of a list (and optionally of the empty lists) of elements as indicated by B.
+
+In this example, the Dict is an arbitrary function that is called before every computation. The Dict of freetype is the result of a
+
+### ep 6000 | positional | intensity_idx 1 | PPL 22.9 | uniq 0.72
+ managers. The session began as the label thought it would help create a cohesive project. The group then held a meeting to try and get the plan in place." It was during this meeting and as I read that note, I knew that I had pushed through changes during my meeting with the label but at the same time, I had not been thinking about them. So, given an opportunity to make a
+
