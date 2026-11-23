@@ -61,7 +61,9 @@ for s in args.strengths:
     acc_hi = float((pred[inten == 1.0] == y[inten == 1.0]).mean())
     acc_lo = float((pred[inten == 0.3] == y[inten == 0.3]).mean())
 
-    ppl = {c: float(np.median([r["ppl"] for r in rows if r["label"] == c and r["ppl"] is not None]))
+    # one-token texts give a NaN perplexity; ignore non-finite values (a NaN made strength 3.0 fail by mistake)
+    ok_ppl = lambda r: r["ppl"] is not None and np.isfinite(r["ppl"])
+    ppl = {c: float(np.median([r["ppl"] for r in rows if r["label"] == c and ok_ppl(r)]))
            for c in classes + ["none"]}
     uniq = {c: float(np.mean([len(set(r["ids"])) / max(1, len(r["ids"])) for r in rows
                               if r["label"] == c and r["ids"]])) for c in classes + ["none"]}

@@ -22,7 +22,7 @@ CONFIG = {
     "reward_clip_b_min" : -2.0,
     "reward_clip_b_max" :  2.0,
     "ppl_brake"     : 1e9,        # Run 16: backbone frozen -> a brake can only skip learning, never helps
-    "num_episodes"  : 5000,    # 800 warm-up + 4200 game episodes
+    "num_episodes"  : 6000,    # 1500 warm-up + 4500 game episodes
     "log_every"     : 25,
     "save_every"    : 500,
     "checkpoint_dir": "runs/run_16/checkpoints",
@@ -46,10 +46,10 @@ CONFIG = {
 
     # ── Run 16 (everything learned in Runs 01-15 + the Q1-Q5 experiments) ─────────────
     "wm_version"        : "v2",   # watermarks v2: fixed disjoint token sets (environment/watermark_v2.py)
-    "wm_strength"       : 2.0,    # global multiplier; chosen by experiments/gate_watermarks.py BEFORE the run
+    "wm_strength"       : 4.0,    # gate result: 0.69 4-class acc, PPL ratio <= 1.41 (1.0: 0.28, 2.0: 0.43, 3.0: 0.55 not decisive)
     "freeze_backbone_a" : True,   # Q3: unanchored backbone training -> word salad; policy head only (C1)
     "b_standardise"     : True,   # Q2: raw pooled features are near-identical; standardise (stats frozen after warm-up)
-    "b_warmup_episodes" : 800,    # A uniform-random + frozen, B supervised only
+    "b_warmup_episodes" : 1500,   # A uniform-random + frozen, B supervised only
     "b_sup_coef"        : 1.0,    # supervised CE kept alongside PPO after warm-up
     "warmup_min_acc"    : 0.40,   # abort if B cannot beat this (chance 0.25) on the true labels
     "final_eval_episodes": 400,   # held-out evaluation at the end (A random, B greedy)
